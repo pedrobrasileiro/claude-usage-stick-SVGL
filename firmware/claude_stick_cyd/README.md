@@ -50,7 +50,10 @@ por um **formulário HTML simples** servido pelo próprio device:
    claude-stick.local pra configurar" até você digitar o **PIN** nesse
    endereço. Sem PIN certo, sem dashboard — mesmo modelo de segurança do
    original (AES-256-GCM + PIN), só que o PIN é digitado no navegador em
-   vez do teclado da tela.
+   vez do teclado da tela. O formulário pede o PIN **duas vezes**
+   (campo + confirmação): sem touch na tela pra corrigir um erro de
+   digitação na hora, é melhor travar antes de gastar uma das 10
+   tentativas (errar demais **apaga tudo** e volta pro início).
 4. **Ajustes** (brilho / intervalo / fuso / slideshow / idioma / trocar
    WiFi / trocar token / apagar tudo): clique longo no BOOT abre a tela
    "Ajustes" no display, que mostra a URL (`claude-stick.local/settings`)
@@ -58,6 +61,44 @@ por um **formulário HTML simples** servido pelo próprio device:
 
 Não existe captive portal automático — o SSID/IP aparecem na própria
 tela do device em cada etapa.
+
+### Como trocar o token depois
+
+1. No device, dá um **clique longo no BOOT** até a tela mostrar
+   **"Ajustes"** (curto muda de tile no dashboard; longo abre Ajustes →
+   Sobre → volta pro dashboard).
+2. A tela de Ajustes mostra a URL `claude-stick.local/settings` — abre
+   essa página no navegador (celular/notebook na mesma rede WiFi).
+3. Clica em **"Trocar token"**. O formulário volta a pedir o **token
+   OAuth novo** + um **PIN** (pode ser o mesmo de antes ou um novo — os
+   dois campos de confirmação valem aqui também).
+4. Ao salvar, o device valida o token na hora (chamada real à API) antes
+   de aceitar, e volta pro dashboard já com o token novo.
+
+O mesmo caminho (`/settings`) serve pra **reconfigurar WiFi** e
+**apagar tudo** (com confirmação via JavaScript no navegador, já que não
+tem tela de toque pra confirmar duas vezes).
+
+### Os botões de `/settings` são cíclicos, não formulários
+
+Cada clique nesses botões **avança pro próximo valor da lista** (não abre
+um campo pra digitar) — clica de novo até chegar no valor que quer:
+
+| Botão | Ciclo |
+|---|---|
+| Trocar intervalo | 30s → 1min → 2min → 5min → 30s → ... |
+| Trocar slideshow | desligado → 5s → 10s → 15s → 30s → desligado → ... |
+| Trocar fuso | GMT-3 → -4 → -5 → -6 → -7 → -8 → -2 → -1 → 0 → +1 → +2 → +3 → GMT-3 → ... |
+| Trocar brilho | baixo → médio → alto → baixo → ... |
+| Trocar idioma | Português → English → Português → ... |
+
+O valor atual de cada um aparece na própria página (ex.: "Atualizar a
+cada: **60s**"), assim dá pra saber onde parar. O modo do heatmap
+("Ritmo por hora": hoje/7d/30d/tudo) é o único que **não** é cíclico — é
+um `<select>` com "Aplicar".
+
+**Atualizar agora**, **Reconfigurar WiFi**, **Trocar token** e **Apagar
+tudo** são ações de um clique só (não cíclicas).
 
 ## Por que sem PSRAM importa (heap apertado)
 
@@ -102,11 +143,17 @@ FQBN: `esp32:esp32:esp32:PartitionScheme=huge_app,UploadSpeed=115200`
 Mesmas libs do original: **GFX Library for Arduino** 1.6.5 · **lvgl**
 9.2.2 · **ArduinoJson** 7.2.0.
 
-## Layout ainda não ajustado pra 320×240
+`./build.sh upload` grava na flash normalmente — depois de gravado, o
+device roda sozinho na tomada/powerbank, sem precisar do cabo USB ligado
+no computador. Só volta a precisar do `arduino-cli` se for atualizar o
+firmware de novo.
 
-As tiles do dashboard foram desenhadas originalmente pra 480×320 (placa
-S3). Os quatro contêineres externos (scrim, barra de referência,
-tileview) já usam as macros `SCREEN_WIDTH`/`SCREEN_HEIGHT` e se ajustam
-certo, mas o **conteúdo interno de cada tile** (posições de texto,
-medidores, números) ainda tem números fixos pensados pra tela maior —
-espera-se cortes/sobreposição em 320×240 até esse ajuste fino ser feito.
+## Layout
+
+As 4 tiles do dashboard (Agora, Modelos, Janela de 5h, Ritmo por hora) e
+o popup de "momento" (animação ao cruzar 25/50/70/100%) já foram
+redimensionados pra 320×240 — o layout original era pensado pra 480×320
+(placa S3) e cortava conteúdo nessa tela menor. O popup de momento, que
+no original tinha mascote e texto lado a lado, foi empilhado
+verticalmente (mascote em cima, texto embaixo) porque não cabe os dois
+lado a lado em 320px de largura.
