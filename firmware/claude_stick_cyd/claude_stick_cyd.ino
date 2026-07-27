@@ -89,6 +89,7 @@ static ModelInfo g_models[NMODELS] = {
   {"Fable",  "claude-fable-5",            {0, 0}, 0},
 };
 static int g_probeIdx = 0;
+static const int MODEL_CENTERS[NMODELS] = {44, 121, 199, 276};  // centros dos mascotes em 320px
 
 // ---- Tokens por sessao (vindos do bridge via POST /tokens) ----
 struct TokenStats { long long tin, tout, cache; int sessions; uint32_t atMs; };
@@ -552,8 +553,14 @@ static String provision_page(bool needWifi, bool needToken, const char *errMsg) 
            "style='width:100%;padding:12px;border-radius:10px;border:1px solid #30303A;"
            "background:#0F0F12;color:#F2F0EC;font-size:14px'>");
   } else {
+    // Sem touch na tela pra corrigir um erro de digitação na hora — confirma
+    // em dois campos, como no cadastro. Errar demais aqui apaga tudo (10
+    // tentativas), então vale a pena checar antes de gastar uma tentativa.
     h += F("<p>Digite o PIN pra desbloquear:</p>"
            "<input name=pin inputmode=numeric maxlength=4 autofocus placeholder='PIN' "
+           "style='width:100%;padding:12px;border-radius:10px;border:1px solid #30303A;"
+           "background:#0F0F12;color:#F2F0EC;font-size:14px;margin-bottom:10px'>"
+           "<input name=pin2 inputmode=numeric maxlength=4 placeholder='confirme o PIN' "
            "style='width:100%;padding:12px;border-radius:10px;border:1px solid #30303A;"
            "background:#0F0F12;color:#F2F0EC;font-size:14px'>");
   }
@@ -652,6 +659,15 @@ static void handleProvisionPost() {
     char m[48]; snprintf(m, sizeof(m), TRS("Aguarde %ds", "Wait %ds"), rem);
     g_web->send(200, "text/html; charset=utf-8", provision_page(false, false, m));
     return;
+  }
+  {
+    String pin2 = g_web->arg("pin2"); pin2.trim();
+    if (pin != pin2) {
+      g_web->send(200, "text/html; charset=utf-8",
+                  provision_page(false, false, TRS("Os dois campos de PIN nao batem. Tente de novo.",
+                                                    "The two PIN fields don't match. Try again.")));
+      return;
+    }
   }
   if (decryptToken(g_blob, pin.c_str(), g_token, sizeof(g_token))) {
     g_pinAttempts = 0; save_attempts();
@@ -1078,46 +1094,45 @@ static void model_chip(int i, char *out, size_t sz, uint32_t *col) {
 // (verde -> vermelho conforme o uso) e countdown grande.
 static void build_win_card(lv_obj_t *t, int x, const char *title,
                            lv_obj_t **pct, lv_obj_t **seg, lv_obj_t **at, lv_obj_t **cd) {
-  lv_obj_t *c = card(t, x, 4, 228, 210);
-  tstatic(c, title, &lv_font_montserrat_14, C_MUTED, 0, 0);
-  *pct = tlabel(c, &lv_font_montserrat_48, C_OK, 0, 20);
+  lv_obj_t *c = card(t, x, 2, 152, 158);
+  tstatic(c, title, &lv_font_montserrat_12, C_MUTED, 0, 0);
+  *pct = tlabel(c, &lv_font_montserrat_28, C_OK, 0, 14);
   for (int i = 0; i < NSEG; i++)                    // medidor: 18 segmentos
-    seg[i] = rrect(c, i * 11, 82, 8, 16, 2, C_TRACK);
-  *at = tlabel(c, &lv_font_montserrat_12, C_FAINT, 0, 106);
-  *cd = tlabel(c, &lv_font_montserrat_40, C_TEXT, 0, 124);
+    seg[i] = rrect(c, i * 6, 54, 4, 12, 1, C_TRACK);
+  *at = tlabel(c, &lv_font_montserrat_12, C_FAINT, 0, 72);
+  *cd = tlabel(c, &lv_font_montserrat_22, C_TEXT, 0, 88);
 }
 static void build_tile_agora(lv_obj_t *t) {
-  build_win_card(t, 8,   TRS("5 HORAS", "5 HOURS"), &g_ui.agPct5, g_ui.seg5, &g_ui.agAt5, &g_ui.agCd5);
-  build_win_card(t, 244, TRS("SEMANA", "WEEK"),     &g_ui.agPct7, g_ui.seg7, &g_ui.agAt7, &g_ui.agCd7);
-  g_ui.agChip = mkchip(t, 8, 220);
-  g_ui.agTok = tlabel(t, &lv_font_montserrat_12, C_MUTED, 130, 226);
-  lv_obj_set_width(g_ui.agTok, 342);
-  lv_obj_set_style_text_align(g_ui.agTok, LV_TEXT_ALIGN_RIGHT, 0);
+  build_win_card(t, 4,   TRS("5 HORAS", "5 HOURS"), &g_ui.agPct5, g_ui.seg5, &g_ui.agAt5, &g_ui.agCd5);
+  build_win_card(t, 164, TRS("SEMANA", "WEEK"),     &g_ui.agPct7, g_ui.seg7, &g_ui.agAt7, &g_ui.agCd7);
+  g_ui.agChip = mkchip(t, 4, 166);
+  g_ui.agTok = tlabel(t, &lv_font_montserrat_12, C_MUTED, 4, 178);
+  lv_obj_set_width(g_ui.agTok, 312);
+  lv_obj_set_style_text_align(g_ui.agTok, LV_TEXT_ALIGN_LEFT, 0);
 }
 // Tile 1 — MODELOS: Clawd oficial por modelo (humor animado) + sonda + incidentes.
 static void build_tile_models(lv_obj_t *t) {
-  static const int CENTERS[NMODELS] = {60, 180, 300, 420};
   for (int i = 0; i < NMODELS; i++) {
-    build_model_mascot(t, CENTERS[i], i);
-    lv_obj_t *n = mklabel(t, g_models[i].name, &lv_font_montserrat_16,
+    build_model_mascot(t, MODEL_CENTERS[i], i);
+    lv_obj_t *n = mklabel(t, g_models[i].name, &lv_font_montserrat_14,
                           model_mood(i) == 1 ? C_TEXT : C_MUTED);
-    lv_obj_set_width(n, 104);
+    lv_obj_set_width(n, 74);
     lv_obj_set_style_text_align(n, LV_TEXT_ALIGN_CENTER, 0);
-    lv_obj_set_pos(n, CENTERS[i] - 52, 98);
+    lv_obj_set_pos(n, MODEL_CENTERS[i] - 37, 98);
     g_ui.mChip[i] = mkchip(t, 0, 122);
   }
   tstatic(t, TRS("sonda real na API \xE2\x80\xA2 1 modelo por ciclo",
                  "live API probe \xE2\x80\xA2 1 model per cycle"),
-          &lv_font_montserrat_12, C_FAINT, 14, 170);
-  g_ui.incident = tlabel(t, &lv_font_montserrat_14, C_MUTED, 14, 194);
-  lv_obj_set_width(g_ui.incident, 452);
+          &lv_font_montserrat_12, C_FAINT, 6, 148);
+  g_ui.incident = tlabel(t, &lv_font_montserrat_14, C_MUTED, 6, 168);
+  lv_obj_set_width(g_ui.incident, 308);
   lv_label_set_long_mode(g_ui.incident, LV_LABEL_LONG_WRAP);
 }
 // Tile 2 — JANELA 5H: histórico + projeção pontilhada até esgotar.
-#define TR_X0 12
-#define TR_Y0 10
-#define TR_W  440
-#define TR_H  126
+#define TR_X0 6
+#define TR_Y0 8
+#define TR_W  296
+#define TR_H  80
 static int tr_x(uint32_t tt, uint32_t ws, uint32_t we) {
   if (we <= ws) return TR_X0;
   long long v = (long long)(tt - ws) * TR_W / (long long)(we - ws);
@@ -1129,10 +1144,9 @@ static int tr_y(float p) {
   return TR_Y0 + TR_H - (int)(p * TR_H / 100.0f);
 }
 static void build_tile_trend(lv_obj_t *t) {
-  tstatic(t, TRS("Janela de 5h", "5-hour window"), &lv_font_montserrat_16, C_TEXT, 14, 2);
-  tstatic(t, TRS("uso real + projecao", "real usage + projection"), &lv_font_montserrat_12, C_FAINT, 320, 6);
+  tstatic(t, TRS("Janela de 5h", "5-hour window"), &lv_font_montserrat_16, C_TEXT, 6, 2);
 
-  lv_obj_t *c = card(t, 8, 26, 464, 170);
+  lv_obj_t *c = card(t, 6, 24, 308, 130);
   lv_obj_set_style_pad_all(c, 0, 0);
 
   // grade: 25/50/75%
@@ -1167,8 +1181,8 @@ static void build_tile_trend(lv_obj_t *t) {
   g_ui.trT0 = tlabel(c, &lv_font_montserrat_12, C_FAINT, TR_X0, TR_Y0 + TR_H + 8);
   g_ui.trT1 = tlabel(c, &lv_font_montserrat_12, C_FAINT, TR_X0 + TR_W - 40, TR_Y0 + TR_H + 8);
 
-  g_ui.trCap = tlabel(t, &lv_font_montserrat_16, C_MUTED, 14, 210);
-  lv_obj_set_width(g_ui.trCap, 452);
+  g_ui.trCap = tlabel(t, &lv_font_montserrat_14, C_MUTED, 6, 160);
+  lv_obj_set_width(g_ui.trCap, 308);
   lv_label_set_long_mode(g_ui.trCap, LV_LABEL_LONG_WRAP);
 }
 // Tile 3 — RITMO: heatmap por hora com filtro de período.
@@ -1194,14 +1208,14 @@ static void heat_btn_cb(lv_event_t *e) {
   heat_redraw();
 }
 static void build_tile_heat(lv_obj_t *t) {
-  tstatic(t, TRS("Ritmo por hora", "Hourly rhythm"), &lv_font_montserrat_16, C_TEXT, 14, 6);
+  tstatic(t, TRS("Ritmo por hora", "Hourly rhythm"), &lv_font_montserrat_16, C_TEXT, 6, 2);
   for (int i = 0; i < 4; i++) {
     lv_obj_t *b = lv_button_create(t);
-    lv_obj_set_size(b, 52, 30);
-    lv_obj_set_pos(b, 246 + i * 56, 0);
-    lv_obj_set_style_radius(b, 15, 0);
+    lv_obj_set_size(b, 70, 26);
+    lv_obj_set_pos(b, 6 + i * 74, 26);
+    lv_obj_set_style_radius(b, 13, 0);
     lv_obj_set_style_shadow_width(b, 0, 0);
-    lv_obj_set_ext_click_area(b, 6);
+    lv_obj_set_ext_click_area(b, 4);
     lv_obj_t *l = mklabel(b, "", &lv_font_montserrat_14, C_MUTED);
     lv_obj_center(l);
     lv_obj_add_event_cb(b, heat_btn_cb, LV_EVENT_CLICKED, (void *)(intptr_t)i);
@@ -1210,9 +1224,9 @@ static void build_tile_heat(lv_obj_t *t) {
   heat_btn_style();
   for (int h = 0; h < 24; h++) {
     lv_obj_t *bar = lv_obj_create(t);
-    lv_obj_set_size(bar, 13, 4);
-    lv_obj_set_pos(bar, 18 + h * 18, 176);
-    lv_obj_set_style_radius(bar, 3, 0);
+    lv_obj_set_size(bar, 8, 4);
+    lv_obj_set_pos(bar, 6 + h * 12, 118);
+    lv_obj_set_style_radius(bar, 2, 0);
     lv_obj_set_style_bg_color(bar, lv_color_hex(C_ACCENT), 0);
     lv_obj_set_style_border_width(bar, 0, 0);
     lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
@@ -1222,10 +1236,10 @@ static void build_tile_heat(lv_obj_t *t) {
   for (int i = 0; i < 5; i++) {
     int h = ticks[i]; char s[4]; snprintf(s, sizeof(s), "%dh", h);
     lv_obj_t *l = mklabel(t, s, &lv_font_montserrat_12, C_MUTED);
-    lv_obj_set_pos(l, 14 + h * 18, 186);
+    lv_obj_set_pos(l, 4 + h * 12, 122);
   }
   tstatic(t, TRS("quota da janela 5h queimada em cada hora local",
-                 "5h-window quota burned per local hour"), &lv_font_montserrat_12, C_FAINT, 14, 214);
+                 "5h-window quota burned per local hour"), &lv_font_montserrat_12, C_FAINT, 6, 142);
 }
 
 static void on_tile_changed(lv_event_t *e) {
@@ -1396,9 +1410,9 @@ static void heat_redraw() {
   for (int h = 0; h < 24; h++) {
     if (!g_ui.heat[h]) continue;
     float r = data[h] / mx; if (r < 0) r = 0; if (r > 1) r = 1;
-    int hgt = 4 + (int)(r * 114);
-    lv_obj_set_size(g_ui.heat[h], 13, hgt);
-    lv_obj_set_y(g_ui.heat[h], 176 - hgt);
+    int hgt = 4 + (int)(r * 62);
+    lv_obj_set_size(g_ui.heat[h], 8, hgt);
+    lv_obj_set_y(g_ui.heat[h], 118 - hgt);
     lv_obj_set_style_bg_color(g_ui.heat[h], lv_color_hex(h == curHour ? C_TEXT : C_ACCENT), 0);
     lv_obj_set_style_bg_opa(g_ui.heat[h], (lv_opa_t)(70 + (int)(r * 185)), 0);
   }
@@ -1474,7 +1488,7 @@ static void show_moment(int win, int thr) {
   // anel de alerta (só no 100%; pisca no tick)
   if (thr == 100) {
     g_mo.ring = lv_obj_create(s);
-    lv_obj_set_pos(g_mo.ring, 4, 4); lv_obj_set_size(g_mo.ring, 472, 312);
+    lv_obj_set_pos(g_mo.ring, 4, 4); lv_obj_set_size(g_mo.ring, SCREEN_WIDTH - 8, SCREEN_HEIGHT - 8);
     lv_obj_set_style_bg_opa(g_mo.ring, 0, 0);
     lv_obj_set_style_radius(g_mo.ring, 14, 0);
     lv_obj_set_style_border_width(g_mo.ring, 4, 0);
@@ -1484,10 +1498,12 @@ static void show_moment(int win, int thr) {
   }
 
   // caixa do Clawd (a caixa inteira anima: bounce / shake / queda de entrada)
-  g_mo.boxY = 110;
+  // Em 320px de largura o mascote+texto não cabem lado a lado (original era
+  // 480px) — mascote centralizado no topo, texto empilhado embaixo.
+  g_mo.boxY = 46;
   lv_obj_t *bx = lv_obj_create(s);
   g_mo.box = bx;
-  lv_obj_set_pos(bx, 36, g_mo.boxY - 40);
+  lv_obj_set_pos(bx, (SCREEN_WIDTH - 176) / 2, g_mo.boxY - 40);
   lv_obj_set_size(bx, 176, 116);
   lv_obj_set_style_bg_opa(bx, 0, 0);
   lv_obj_set_style_border_width(bx, 0, 0);
@@ -1533,12 +1549,19 @@ static void show_moment(int win, int thr) {
     }
   }
 
-  // coluna de texto à direita
+  // texto empilhado abaixo do mascote (320px não cabe a coluna lado a lado
+  // do original 480px) — tudo centralizado horizontalmente.
   lv_obj_t *win_l = mklabel(s, win == 0 ? TRS("JANELA DE 5 HORAS", "5-HOUR WINDOW")
                                         : TRS("JANELA SEMANAL", "WEEKLY WINDOW"),
-                            &lv_font_montserrat_20, C_MUTED);
-  lv_obj_set_pos(win_l, 240, 42);
-  g_mo.pct = tlabel(s, &lv_font_montserrat_48, C_OK, 240, 70);
+                            &lv_font_montserrat_16, C_MUTED);
+  lv_obj_set_pos(win_l, 0, 124);
+  lv_obj_set_width(win_l, SCREEN_WIDTH);
+  lv_obj_set_style_text_align(win_l, LV_TEXT_ALIGN_CENTER, 0);
+
+  g_mo.pct = tlabel(s, &lv_font_montserrat_40, C_OK, 0, 148);
+  lv_obj_set_width(g_mo.pct, SCREEN_WIDTH);
+  lv_obj_set_style_text_align(g_mo.pct, LV_TEXT_ALIGN_CENTER, 0);
+
   const char *MSG[4] = {
     TRS("Comecando \xE2\x80\xA2 ritmo tranquilo",       "Just starting \xE2\x80\xA2 easy pace"),
     TRS("Metade da janela usada",                       "Half the window used"),
@@ -1546,22 +1569,19 @@ static void show_moment(int win, int thr) {
     TRS("Limite atingido \xE2\x80\xA2 aguarde o reset", "Limit reached \xE2\x80\xA2 wait for the reset"),
   };
   int mi = (thr == 25) ? 0 : (thr == 50) ? 1 : (thr == 70) ? 2 : 3;
-  lv_obj_t *msg = mklabel(s, MSG[mi], &lv_font_montserrat_16, C_TEXT);
-  lv_obj_set_pos(msg, 240, 148);
-  lv_obj_set_width(msg, 232);
+  lv_obj_t *msg = mklabel(s, MSG[mi], &lv_font_montserrat_14, C_TEXT);
+  lv_obj_set_pos(msg, 6, 196);
+  lv_obj_set_width(msg, SCREEN_WIDTH - 12);
+  lv_obj_set_style_text_align(msg, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(msg, LV_LABEL_LONG_WRAP);
-
-  for (int i = 0; i < NSEG; i++)
-    g_mo.seg[i] = rrect(s, 240 + i * 11, 196, 8, 16, 2, C_TRACK);
 
   char e[32], b[48];
   fmt_eta(win == 0 ? g_usage.h5ResetEpoch : g_usage.d7ResetEpoch, e, sizeof(e));
   snprintf(b, sizeof(b), TRS("reseta em %s", "resets in %s"), e);
-  lv_obj_t *eta = mklabel(s, b, &lv_font_montserrat_14, C_FAINT);
-  lv_obj_set_pos(eta, 240, 228);
-
-  lv_obj_t *hint = mklabel(s, TRS("toque para fechar", "tap to close"), &lv_font_montserrat_12, C_FAINT);
-  lv_obj_set_pos(hint, 352, 296);
+  lv_obj_t *eta = mklabel(s, b, &lv_font_montserrat_12, C_FAINT);
+  lv_obj_set_pos(eta, 0, 222);
+  lv_obj_set_width(eta, SCREEN_WIDTH);
+  lv_obj_set_style_text_align(eta, LV_TEXT_ALIGN_CENTER, 0);
 }
 
 // Anima o momento (chamado a cada frame do loop enquanto o overlay existe).
@@ -1570,14 +1590,15 @@ static void moment_tick() {
   uint32_t t = millis() - g_mo.t0;
 
   // entrada: Clawd cai de cima com acomodação; depois o humor manda
-  int y = g_mo.boxY, x = 36;
+  const int boxX = (SCREEN_WIDTH - 176) / 2;
+  int y = g_mo.boxY, x = boxX;
   if (t < 450) {
     float p = t / 450.0f;
     y = g_mo.boxY - (int)((1.0f - p) * (1.0f - p) * 60.0f);
   } else if (g_mo.thr == 25 || g_mo.thr == 50) {
     y = g_mo.boxY + (int)(4.0f * sinf((t - 450) / 260.0f));           // bounce feliz
   } else if (g_mo.thr == 70) {
-    x = 36 + (((t / 70) % 2) ? 2 : -2);                                // treme
+    x = boxX + (((t / 70) % 2) ? 2 : -2);                              // treme
   } else if (g_mo.thr == 100) {
     y = g_mo.boxY + 6;                                                 // caído
   }
@@ -1589,7 +1610,6 @@ static void moment_tick() {
   char b[12]; snprintf(b, sizeof(b), "%d%%", (int)(v + 0.5f));
   lv_label_set_text(g_mo.pct, b);
   lv_obj_set_style_text_color(g_mo.pct, grad_color(v), 0);
-  set_meter(g_mo.seg, v);
 
   // gotas de suor caindo em ciclo
   for (int i = 0; i < 2; i++) {
@@ -1628,8 +1648,7 @@ static void refresh_ui_values() {
     model_chip(i, txt, sizeof(txt), &col);
     set_chip(g_ui.mChip[i], txt, col);
     lv_obj_update_layout(g_ui.mChip[i]);
-    static const int CENTERS[NMODELS] = {60, 180, 300, 420};
-    lv_obj_set_x(g_ui.mChip[i], CENTERS[i] - lv_obj_get_width(g_ui.mChip[i]) / 2);
+    lv_obj_set_x(g_ui.mChip[i], MODEL_CENTERS[i] - lv_obj_get_width(g_ui.mChip[i]) / 2);
   }
   if (g_ui.incident) {
     bool any = !(g_status.haikuUp && g_status.sonnetUp && g_status.opusUp && g_status.fableUp);
