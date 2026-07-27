@@ -3,11 +3,17 @@
 Fork do [`../claude_stick`](../claude_stick) (original, Guition JC4832W535
 480×320 touch) adaptado pra placa **ESP32-2432S028** — "Cheap Yellow
 Display" (CYD): ESP32 clássico WROOM-32, **sem PSRAM**, tela ILI9341
-**320×240** e, nesta unidade específica, **touch inoperante** (testado
-exaustivamente no bring-up, sem resposta).
+**320×240** e touch **XPT2046** resistivo.
 
-Sem touch, a UX foi redesenhada em volta do que a placa tem de sobra: um
-**botão físico (BOOT)** e uma **rede WiFi**.
+O touch dessa unidade tinha sido dado como inoperante num bring-up
+anterior (varredura SPI incompleta + varredura I2C exaustiva, sem
+resultado). O manual/schematic oficial do fabricante
+([`../bringup_cyd/Manual_Pinagem_Foto.pdf`](../bringup_cyd/Manual_Pinagem_Foto.pdf))
+revelou a pinagem real do chip XPT2046 (U3) — um barramento SPI
+**separado** do display, nunca testado corretamente antes — e com os
+pinos certos o touch respondeu normalmente. Navegação e ajustes hoje são
+nativos por toque, com **botão físico (BOOT)** e **portal web**
+continuando como fallback.
 
 ## O que muda em relação ao original
 
@@ -15,29 +21,44 @@ Sem touch, a UX foi redesenhada em volta do que a placa tem de sobra: um
 |---|---|---|
 | Chip | ESP32-S3, 8 MB PSRAM | ESP32 clássico, **sem PSRAM** |
 | Tela | 480×320 AXS15231B QSPI | 320×240 ILI9341 SPI |
-| Touch | Capacitivo, navegação por swipe | **Nenhum** |
-| Navegação | Toque na tela | **Botão BOOT (GPIO0)** |
-| PIN / token / WiFi | Teclado na tela (LVGL) | **Formulário no navegador** |
+| Touch | Capacitivo (AXS15231B, I2C) | **Resistivo (XPT2046, SPI dedicado)** |
+| Navegação | Toque na tela | Toque na tela (BOOT físico como fallback) |
+| PIN | Teclado na tela, a cada boot | Teclado na tela, a cada boot |
+| WiFi / token (1º uso) | Teclado na tela (LVGL) | Formulário no navegador (fallback web) |
 
 Todo o resto — leitura de uso via headers da API, sondagem de saúde dos
 modelos, histórico/heatmap, cifra do token — é o mesmo código, só
 recompilado pra essa placa.
 
-## Navegação (só o botão BOOT)
+## Navegação por touch
 
-- **Clique curto** no dashboard (`ST_MAIN`): avança pra próxima tile
-  (Agora → Modelos → Janela 5h → Ritmo por hora → volta pra Agora).
-- **Clique longo**: `ST_MAIN` → **Ajustes** → **Sobre** → volta pro
-  dashboard. Um clique longo dentro de Ajustes/Sobre também volta direto
-  pro dashboard.
+- **Swipe** nos tiles do dashboard (Agora → Modelos → Janela 5h → Ritmo
+  por hora).
+- **Engrenagem** no canto superior direito do dashboard abre **Ajustes**
+  (pede PIN se a sessão de 5 min já expirou).
+- Botão **Voltar** no topo das telas de Ajustes e Sobre.
+- Cada linha de Ajustes é um botão: toque avança pro próximo valor
+  (brilho, intervalo, fuso, slideshow, ritmo por hora/heatmap) ou abre a
+  ação (atualizar agora, reconfigurar WiFi, trocar token, sobre, apagar
+  tudo — este último exige dois toques de confirmação).
+- **BOOT físico (GPIO0)** continua funcionando em paralelo como fallback:
+  clique curto avança tile / volta pro dashboard; clique longo abre
+  Ajustes (mesmo gate de PIN) / Sobre.
 
-Sem gestos, sem toques na tela — é só isso.
+## PIN a cada boot
 
-## Provisionamento e ajustes: tudo pelo navegador
+Como no original, o PIN é pedido **toda vez que a placa liga** (teclado
+numérico touch) pra decifrar o token — nunca fica salvo em claro na NVS.
+A mesma tela de PIN também gateia o acesso a Ajustes, com sessão de 5
+minutos, lockout progressivo e apaga-tudo em 10 tentativas erradas.
 
-Como não há teclado touch, PIN, token, WiFi e todos os ajustes (brilho,
-intervalo de poll, fuso horário, slideshow, heatmap, idioma) são feitos
-por um **formulário HTML simples** servido pelo próprio device:
+## Provisionamento (WiFi + token): ainda pelo navegador
+
+Configurar WiFi e trocar o token continuam sendo feitos por um
+**formulário HTML** servido pelo próprio device — tela pequena (320×240)
++ touch resistivo tornam um teclado alfanumérico tocado mais chato pra
+digitar SSID/senha/token, e é uma ação rara (1x no provisionamento,
+raramente depois):
 
 1. **Primeiro uso** (sem WiFi salvo): a placa sobe um **ponto de acesso**
    próprio, `ClaudeStick-Setup` (sem senha). Conecte seu celular/notebook
@@ -46,61 +67,17 @@ por um **formulário HTML simples** servido pelo próprio device:
 2. **Depois de configurado**: a placa conecta na sua WiFi normal (modo
    STA) e o mesmo formulário fica disponível em
    **`http://claude-stick.local`** (mDNS) — ou pelo IP mostrado na tela.
-3. **A cada boot seguinte**: liga e vai direto pro dashboard, sem pedir
-   PIN — a placa guarda o PIN na NVS do device e decifra o token
-   sozinha (mesma cifra AES-256-GCM do original, só que a chave "mora"
-   no device em vez de ser digitada toda vez). Trade-off: quem tiver
-   acesso físico ao device (ou um dump da flash) consegue ler esse PIN
-   salvo — mesmo risco que os outros ajustes já gravados em claro hoje
-   (brilho, fuso etc.).
-4. **Ajustes** (brilho / intervalo / fuso / slideshow / idioma / trocar
-   WiFi / trocar token / apagar tudo): clique longo no BOOT abre a tela
-   "Ajustes" no display, que mostra a URL (`claude-stick.local/settings`)
-   pra abrir no navegador. Essa página **pede o PIN** antes de liberar
-   qualquer ajuste (sessão de 5 minutos) — mesmo lockout progressivo e
-   apaga-tudo em 10 tentativas erradas do desbloqueio de antes.
+3. **Reconfigurar WiFi / trocar token**: pela tela de Ajustes (toque) ou
+   por `claude-stick.local/settings` no navegador — os dois caem no mesmo
+   fluxo de provisionamento web.
 
 Não existe captive portal automático — o SSID/IP aparecem na própria
 tela do device em cada etapa.
 
-### Como trocar o token depois
-
-1. No device, dá um **clique longo no BOOT** até a tela mostrar
-   **"Ajustes"** (curto muda de tile no dashboard; longo abre Ajustes →
-   Sobre → volta pro dashboard).
-2. A tela de Ajustes mostra a URL `claude-stick.local/settings` — abre
-   essa página no navegador (celular/notebook na mesma rede WiFi) e
-   digita o **PIN** quando pedido.
-3. Clica em **"Trocar token"**. O formulário volta a pedir o **token
-   OAuth novo** + um **PIN** (pode ser o mesmo de antes ou um novo — os
-   dois campos de confirmação valem aqui também).
-4. Ao salvar, o device valida o token na hora (chamada real à API) antes
-   de aceitar, e volta pro dashboard já com o token novo.
-
-O mesmo caminho (`/settings`) serve pra **reconfigurar WiFi** e
-**apagar tudo** (com confirmação via JavaScript no navegador, já que não
-tem tela de toque pra confirmar duas vezes).
-
-### Os botões de `/settings` são cíclicos, não formulários
-
-Cada clique nesses botões **avança pro próximo valor da lista** (não abre
-um campo pra digitar) — clica de novo até chegar no valor que quer:
-
-| Botão | Ciclo |
-|---|---|
-| Trocar intervalo | 30s → 1min → 2min → 5min → 30s → ... |
-| Trocar slideshow | desligado → 5s → 10s → 15s → 30s → desligado → ... |
-| Trocar fuso | GMT-3 → -4 → -5 → -6 → -7 → -8 → -2 → -1 → 0 → +1 → +2 → +3 → GMT-3 → ... |
-| Trocar brilho | baixo → médio → alto → baixo → ... |
-| Trocar idioma | Português → English → Português → ... |
-
-O valor atual de cada um aparece na própria página (ex.: "Atualizar a
-cada: **60s**"), assim dá pra saber onde parar. O modo do heatmap
-("Ritmo por hora": hoje/7d/30d/tudo) é o único que **não** é cíclico — é
-um `<select>` com "Aplicar".
-
-**Atualizar agora**, **Reconfigurar WiFi**, **Trocar token** e **Apagar
-tudo** são ações de um clique só (não cíclicas).
+O portal web (`/settings`) também serve como fallback completo de
+ajustes (mesmas ações da tela touch, em forma de formulário) — útil se o
+touch falhar ou descalibrar em campo — e mantém os endpoints `/window` e
+`/tokens` usados pelo bridge `tools/token_bridge.py`.
 
 ## Por que sem PSRAM importa (heap apertado)
 
@@ -121,12 +98,13 @@ core instalado, ver `firmware/README.md`).
 |---|---|
 | Placa | **ESP32-2432S028** ("Cheap Yellow Display" / CYD) |
 | Chip | ESP32 clássico WROOM-32, **sem PSRAM** |
-| Tela | **ILI9341**, SPI, 320×240 |
-| Pinos | `DC=2 CS=15 SCLK=14 MOSI=13 MISO=12 BL=21` (compartilhando o mesmo `SPIClass` que o touch, que não é usado aqui) |
-| Botão | **BOOT / GPIO0**, ativo em LOW (pull-up de fábrica) |
-| Touch | Presente no hardware, **não usado** (inoperante nesta unidade) |
+| Tela | **ILI9341**, SPI, 320×240 — `DC=2 CS=15 SCLK=14 MOSI=13 MISO=12 BL=21` |
+| Touch | **XPT2046** resistivo, SPI dedicado (HSPI) — `CLK=25 CS=33 MOSI=32 MISO=39 IRQ=36` |
+| Botão | **BOOT / GPIO0**, ativo em LOW (pull-up de fábrica) — fallback |
 
-Bring-up de referência (pinos/cores validados) em
+Pinagem do touch confirmada no manual/schematic oficial do fabricante:
+[`../bringup_cyd/Manual_Pinagem_Foto.pdf`](../bringup_cyd/Manual_Pinagem_Foto.pdf).
+Bring-up de referência (pinos/cores/calibração validados) em
 [`../bringup_cyd/`](../bringup_cyd/).
 
 ## Build & flash

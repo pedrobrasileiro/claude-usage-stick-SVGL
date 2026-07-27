@@ -3,8 +3,10 @@
 
 // ============================================================
 // Claude Usage Stick — ESP32-2432S028 "Cheap Yellow Display" (CYD)
-// ESP32 clássico WROOM-32, sem PSRAM, sem touch (ver bring-up:
-// firmware/bringup_cyd/). Navegação via botão físico BOOT.
+// ESP32 clássico WROOM-32, sem PSRAM. Touch XPT2046 (resistivo),
+// validado fisicamente em firmware/bringup_cyd/ — ver
+// Manual_Pinagem_Foto.pdf (schematic oficial do fabricante, chip U3).
+// Navegação touch, com botão físico BOOT como fallback.
 // ============================================================
 
 // ── Firmware ─────────────────────────────────────────────
@@ -24,8 +26,21 @@
 #define TFT_ROTATION   1
 #define SPI_FREQ       40000000UL
 
-// ── Navegação (sem touch) ────────────────────────────────
-#define CFG_BOOT_PIN            0     // botão físico BOOT, ativo em LOW
+// ── Touch SPI (XPT2046) — barramento separado do display, HSPI dedicado ──
+#define TOUCH_CLK   25
+#define TOUCH_CS    33
+#define TOUCH_MOSI  32
+#define TOUCH_MISO  39
+#define TOUCH_IRQ   36
+
+// Calibração medida no bring-up (4 cantos, unidade física validada)
+#define TOUCH_X_MIN 270
+#define TOUCH_X_MAX 3660
+#define TOUCH_Y_MIN 440
+#define TOUCH_Y_MAX 3710
+
+// ── Navegação ─────────────────────────────────────────────
+#define CFG_BOOT_PIN            0     // botão físico BOOT, ativo em LOW (fallback)
 #define BOOT_LONGPRESS_MS    900
 
 // ── Polling ──────────────────────────────────────────────

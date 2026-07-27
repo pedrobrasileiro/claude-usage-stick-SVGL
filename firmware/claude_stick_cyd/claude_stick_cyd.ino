@@ -38,6 +38,7 @@
 #include "api.h"
 #include "status.h"
 #include "crypto.h"
+#include "touch.h"
 #include "logo_assets.h"   // Clawd + logotipo oficiais (gerado por tools/gen_logo_assets.py)
 
 // ---- Paleta (escuro, minimalista; acento coral do Claude) ----
@@ -61,7 +62,9 @@ static uint8_t g_lang = 0;
 
 // ---- Hardware ----
 Arduino_GFX *gfx = nullptr;
-SPIClass sharedSPI(VSPI);   // display não tem touch pra dividir o barramento, mas mantém padrão do bring-up
+SPIClass sharedSPI(VSPI);   // display
+static XPT2046_TouchDrv g_touch(TOUCH_CLK, TOUCH_MISO, TOUCH_MOSI, TOUCH_CS, TOUCH_IRQ,
+                                 TOUCH_X_MIN, TOUCH_X_MAX, TOUCH_Y_MIN, TOUCH_Y_MAX);  // touch, HSPI dedicado
 WiFiManager g_wifi;
 Preferences g_prefs;
 
@@ -72,7 +75,7 @@ static bool     g_bootLongFired = false;
 
 // ---- Estado da aplicação ----
 enum State {
-  ST_BOOT, ST_PROVISION, ST_LOADING, ST_MAIN, ST_SETTINGS, ST_ABOUT, ST_ERROR
+  ST_BOOT, ST_PIN, ST_PROVISION, ST_LOADING, ST_MAIN, ST_SETTINGS, ST_ABOUT, ST_ERROR
 };
 static State g_state = ST_BOOT;
 static State g_pending = ST_BOOT;
@@ -104,10 +107,11 @@ static TokenStats g_tok = {0, 0, 0, 0, 0};
 static EncryptedBlob g_blob;
 static bool g_hasToken = false;              // existe blob salvo no NVS
 static char g_token[200] = {0};              // token decifrado (só em RAM)
-static char g_savedPin[PIN_LEN + 1] = {0};   // PIN salvo em claro na NVS (decrypt automático no boot)
+static char g_pinEntry[PIN_LEN + 1] = {0};   // dígitos sendo digitados na tela de PIN
+static bool g_pinForSettings = false;        // ST_PIN entrado pra gatear /Ajustes (não pra decifrar no boot)
 static int  g_pinAttempts = 0;               // tentativas erradas (persistido)
 static uint32_t g_lockoutUntil = 0;          // millis até liberar nova tentativa
-static uint32_t g_settingsUnlockedUntil = 0; // millis até expirar sessão de /settings desbloqueado
+static uint32_t g_settingsUnlockedUntil = 0; // millis até expirar sessão de Ajustes desbloqueado
 static bool g_timeInit = false;
 static bool g_forceWifi = false;             // "Configurar WiFi" pediu reconfiguração
 static bool g_forceToken = false;            // "Trocar token" pediu novo token
@@ -118,6 +122,7 @@ static bool g_refreshing = false;         // busca em andamento
 static bool g_lastFetchOk = true;         // último fetch deu certo?
 static uint32_t g_lastOkMs = 0;           // millis do último sucesso (p/ "atualizado há Xs")
 static lv_obj_t *g_hdrStatus = nullptr;   // texto de status no cabeçalho do dashboard
+static lv_obj_t *g_pinDots = nullptr, *g_pinMsg = nullptr;
 
 // ---- Brilho ----
 static const uint8_t BRI_LEVELS[3] = {60, 160, 255};
@@ -190,6 +195,9 @@ static void ui_settings();
 static void ui_message(const char *title, const char *sub, uint32_t color);
 static void start_data_web();
 static void apply_setting_action(int act);
+static bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool *wipedOut = nullptr,
+                                   char *tokenOut = nullptr, size_t tokenOutLen = 0);
+static bool settings_unlocked();
 static void trend_redraw();
 static void heat_redraw();
 static void update_tok_row();
@@ -208,7 +216,21 @@ static void disp_flush_cb(lv_display_t *disp, const lv_area_t *area, uint8_t *px
   lv_disp_flush_ready(disp);
 }
 
-// ---- Botão físico BOOT (clique curto = próxima tela; longo = ajustes) ----
+static void touch_read_cb(lv_indev_t *indev, lv_indev_data_t *data) {
+  (void)indev;
+  uint16_t x, y;
+  if (g_touch.touched()) {
+    g_touch.readData(&x, &y);
+    data->point.x = x;
+    data->point.y = y;
+    data->state = LV_INDEV_STATE_PRESSED;
+    g_lastTouchMs = millis();
+  } else {
+    data->state = LV_INDEV_STATE_RELEASED;
+  }
+}
+
+// ---- Botão físico BOOT (clique curto = próxima tela; longo = ajustes; fallback) ----
 static void boot_button_poll() {
   bool down = (digitalRead(CFG_BOOT_PIN) == LOW);
   uint32_t now = millis();
@@ -217,7 +239,7 @@ static void boot_button_poll() {
   } else if (down && g_bootDown) {
     if (!g_bootLongFired && now - g_bootDownMs > BOOT_LONGPRESS_MS) {
       g_bootLongFired = true;
-      if (g_state == ST_MAIN) request_state(ST_SETTINGS);
+      if (g_state == ST_MAIN) open_settings();
       else if (g_state == ST_SETTINGS) request_state(ST_ABOUT);
     }
   } else if (!down && g_bootDown) {
@@ -228,6 +250,8 @@ static void boot_button_poll() {
         if (g_ui.tv) lv_tileview_set_tile_by_index(g_ui.tv, next, 0, LV_ANIM_ON);
       } else if (g_state == ST_SETTINGS || g_state == ST_ABOUT) {
         request_state(ST_MAIN);
+      } else if (g_state == ST_PIN && g_pinForSettings) {
+        request_state(ST_MAIN);               // cancela o gate de Ajustes
       }
     }
   }
@@ -258,6 +282,11 @@ static lv_obj_t *mkbtn(lv_obj_t *p, const char *txt, const lv_font_t *font,
   lv_obj_set_style_shadow_width(b, 0, 0);
   lv_obj_center(mklabel(b, txt, font, fg));
   return b;
+}
+// Navegação genérica — user_data leva o State alvo.
+static void nav_cb(lv_event_t *e) {
+  State s = (State)(intptr_t)lv_event_get_user_data(e);
+  request_state(s);
 }
 static uint32_t pct_color(float p) {
   if (p < 70.0f) return C_OK;
@@ -329,8 +358,6 @@ static void load_persisted() {
     g_hasToken = true;
   }
   g_pinAttempts = g_prefs.getInt("pinatt", 0);
-  String p = g_prefs.getString("pin", "");
-  strlcpy(g_savedPin, p.c_str(), sizeof(g_savedPin));
   g_briIdx = g_prefs.getInt("bri", 1);
   if (g_briIdx < 0 || g_briIdx > 2) g_briIdx = 1;
   g_pollSec = g_prefs.getInt("poll", DEFAULT_POLL_SEC);
@@ -349,14 +376,118 @@ static void save_attempts() { g_prefs.putInt("pinatt", g_pinAttempts); }
 static void apply_brightness() { ledcWrite(TFT_BL, BRI_LEVELS[g_briIdx]); }
 
 static void factory_reset() {
-  g_prefs.clear();              // apaga blob, pin, pinatt, bri do namespace claude
+  g_prefs.clear();              // apaga blob, pinatt, bri do namespace claude
   g_wifi.forgetAll();
   g_hasToken = false;
   g_token[0] = 0;
-  g_savedPin[0] = 0;
+  g_pinEntry[0] = 0;
   g_pinAttempts = 0;
   Serial.println("[RESET] tudo apagado");
 }
+
+// ============================================================
+// Tela: PIN (keypad touch) — pedido a cada boot pra decifrar o token;
+// mesma tela gateia o acesso a Ajustes (settings_unlocked()/g_settingsUnlockedUntil).
+// ============================================================
+static const char *pin_map[] = {
+  "1", "2", "3", "\n",
+  "4", "5", "6", "\n",
+  "7", "8", "9", "\n",
+  LV_SYMBOL_LEFT, "0", LV_SYMBOL_OK, ""
+};
+
+static void pin_update_dots() {
+  if (!g_pinDots) return;
+  char dots[24] = {0};
+  int len = strlen(g_pinEntry);
+  for (int i = 0; i < PIN_LEN; i++) {
+    strcat(dots, i < len ? "*" : "_");
+    if (i < PIN_LEN - 1) strcat(dots, " ");
+  }
+  lv_label_set_text(g_pinDots, dots);
+}
+
+static void pin_submit() {
+  char err[80] = {0};
+  bool ok;
+  if (g_pinForSettings) ok = verify_pin_or_lockout(String(g_pinEntry), err, sizeof(err));
+  else                  ok = verify_pin_or_lockout(String(g_pinEntry), err, sizeof(err),
+                                                    nullptr, g_token, sizeof(g_token));
+  g_pinEntry[0] = 0;
+  pin_update_dots();
+  if (ok) {
+    if (g_pinForSettings) {
+      g_settingsUnlockedUntil = millis() + SETTINGS_SESSION_MS;
+      request_state(ST_SETTINGS);
+    } else {
+      request_state(ST_LOADING);
+    }
+    return;
+  }
+  if (g_pinMsg) lv_label_set_text(g_pinMsg, err);   // wipe (se ocorrer) já redireciona pro provisionamento
+}
+
+static void pin_kb_cb(lv_event_t *e) {
+  if (lv_event_get_code(e) != LV_EVENT_VALUE_CHANGED) return;
+  if (millis() < g_lockoutUntil) return;     // travado
+  lv_obj_t *bm = (lv_obj_t *)lv_event_get_target(e);
+  uint32_t id = lv_buttonmatrix_get_selected_button(bm);
+  const char *txt = lv_buttonmatrix_get_button_text(bm, id);
+  if (!txt) return;
+  int len = strlen(g_pinEntry);
+  if (strcmp(txt, LV_SYMBOL_LEFT) == 0) {
+    if (len > 0) g_pinEntry[len - 1] = 0;
+    pin_update_dots();
+  } else if (strcmp(txt, LV_SYMBOL_OK) == 0) {
+    if (len == PIN_LEN) pin_submit();
+  } else if (len < PIN_LEN) {
+    g_pinEntry[len] = txt[0];
+    g_pinEntry[len + 1] = 0;
+    pin_update_dots();
+    if (len + 1 == PIN_LEN) pin_submit();     // auto-submit ao completar
+  }
+}
+
+static void ui_pin() {
+  lv_obj_t *scr = lv_screen_active();
+  lv_obj_t *t = mklabel(scr, TRS("Digite o PIN", "Enter the PIN"), &lv_font_montserrat_18, C_TEXT);
+  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 8);
+
+  g_pinDots = mklabel(scr, "", &lv_font_montserrat_24, C_ACCENT);
+  lv_obj_align(g_pinDots, LV_ALIGN_TOP_MID, 0, 36);
+  pin_update_dots();
+
+  g_pinMsg = mklabel(scr, g_pinForSettings ? TRS("Acesso aos ajustes", "Access to settings")
+                                            : TRS("Necessario p/ desbloquear o token",
+                                                  "Needed to unlock the token"),
+                     &lv_font_montserrat_12, C_MUTED);
+  lv_obj_align(g_pinMsg, LV_ALIGN_TOP_MID, 0, 62);
+
+  lv_obj_t *bm = lv_buttonmatrix_create(scr);
+  lv_buttonmatrix_set_map(bm, pin_map);
+  lv_obj_set_size(bm, SCREEN_WIDTH - 40, SCREEN_HEIGHT - 92);
+  lv_obj_align(bm, LV_ALIGN_BOTTOM_MID, 0, -6);
+  lv_obj_set_style_bg_color(bm, lv_color_hex(C_BG), 0);
+  lv_obj_set_style_border_width(bm, 0, 0);
+  lv_obj_set_style_text_font(bm, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_bg_color(bm, lv_color_hex(C_SURFACE2), LV_PART_ITEMS);
+  lv_obj_set_style_text_color(bm, lv_color_hex(C_TEXT), LV_PART_ITEMS);
+  lv_obj_add_event_cb(bm, pin_kb_cb, LV_EVENT_VALUE_CHANGED, NULL);
+
+  if (millis() < g_lockoutUntil && g_pinMsg) {
+    int rem = (g_lockoutUntil - millis()) / 1000;
+    char m[48]; snprintf(m, sizeof(m), TRS("Aguarde %ds", "Wait %ds"), rem);
+    lv_label_set_text(g_pinMsg, m);
+  }
+}
+
+static void open_settings() {
+  if (settings_unlocked()) { request_state(ST_SETTINGS); return; }
+  g_pinForSettings = true;
+  g_pinEntry[0] = 0;
+  request_state(ST_PIN);
+}
+static void gear_cb(lv_event_t *e) { (void)e; open_settings(); }
 
 // ============================================================
 // WebServer: dados (bridge de tokens) — sempre ativo no dashboard
@@ -499,8 +630,8 @@ static String settings_page(const char *msg) {
 // erro/wipe. wipedOut (se não-nulo) sai true quando o limite de tentativas
 // estourou e factory_reset() já rodou. tokenOut/tokenOutLen (se não-nulo)
 // recebem o token decifrado — sem eles o decrypt só serve pra validar o PIN.
-static bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool *wipedOut = nullptr,
-                                   char *tokenOut = nullptr, size_t tokenOutLen = 0) {
+static bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool *wipedOut,
+                                   char *tokenOut, size_t tokenOutLen) {
   if (wipedOut) *wipedOut = false;
   if (millis() < g_lockoutUntil) {
     int rem = (g_lockoutUntil - millis()) / 1000;
@@ -730,8 +861,6 @@ static void handleProvisionPost() {
       return;
     }
     save_blob();
-    g_prefs.putString("pin", pin);
-    strlcpy(g_savedPin, pin.c_str(), sizeof(g_savedPin));
     strlcpy(g_token, token.c_str(), sizeof(g_token));
     g_usage = tmp;
     g_hasToken = true; g_forceToken = false;
@@ -754,8 +883,6 @@ static void handleProvisionPost() {
   char err[80] = {0};
   bool wiped = false;
   if (verify_pin_or_lockout(pin, err, sizeof(err), &wiped, g_token, sizeof(g_token))) {
-    g_prefs.putString("pin", pin);           // re-sincroniza pro boot automático seguinte
-    strlcpy(g_savedPin, pin.c_str(), sizeof(g_savedPin));
     g_web->send(200, "text/html; charset=utf-8", provision_done_page());
     request_state(ST_LOADING);
   } else {
@@ -1760,8 +1887,9 @@ static void ui_main() {
 
   start_data_web();
 
-  // Header: Clawd + logotipo. Sem touch: sem botão de refresh/engrenagem —
-  // BOOT curto muda de tile, BOOT longo abre Ajustes (ver boot_button_poll()).
+  // Header: Clawd + logotipo + engrenagem (abre Ajustes, gateada por PIN se
+  // a sessão expirou — ver open_settings()). BOOT longo continua como
+  // fallback (ver boot_button_poll()).
   lv_obj_t *hIcon = lv_image_create(scr);
   lv_image_set_src(hIcon, &img_clawd_sm);
   lv_obj_set_pos(hIcon, 6, 4);
@@ -1769,8 +1897,14 @@ static void ui_main() {
   lv_image_set_src(hWord, &img_wordmark);
   lv_obj_set_pos(hWord, 46, 6);
 
+  lv_obj_t *gear = mkbtn(scr, LV_SYMBOL_SETTINGS, &lv_font_montserrat_14, C_SURFACE2, C_TEXT);
+  lv_obj_set_size(gear, 26, 22);
+  lv_obj_set_ext_click_area(gear, 10);
+  lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -2, 3);
+  lv_obj_add_event_cb(gear, gear_cb, LV_EVENT_CLICKED, NULL);
+
   g_hdrStatus = mklabel(scr, "", &lv_font_montserrat_12, C_MUTED);
-  lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -4, 8);
+  lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -30, 8);
 
   // Barra fina decrescente até o próximo refresh automático (só indicador).
   g_ui.refBar = lv_bar_create(scr);
@@ -1821,7 +1955,7 @@ static void ui_main() {
 // ============================================================
 static bool g_wipeArmed = false;
 static lv_obj_t *g_briLbl = nullptr, *g_wipeLbl = nullptr, *g_pollLbl = nullptr,
-                *g_tzLbl = nullptr, *g_slideLbl = nullptr;
+                *g_tzLbl = nullptr, *g_slideLbl = nullptr, *g_heatLbl = nullptr;
 static const int POLL_OPTS[4] = {30, 60, 120, 300};
 static const int TZ_OPTS[] = {-3, -4, -5, -6, -7, -8, -2, -1, 0, 1, 2, 3};
 #define NTZ ((int)(sizeof(TZ_OPTS) / sizeof(TZ_OPTS[0])))
@@ -1840,7 +1974,7 @@ static void apply_setting_action(int act) {
         lv_label_set_text(g_briLbl, m);
       }
       break;
-    case 4:                                            // apagar tudo (confirmação no form web)
+    case 4:                                            // apagar tudo (2 toques, ou confirmação no form web)
       factory_reset();
       g_forceWifi = true; g_forceToken = true;
       request_state(ST_PROVISION);
@@ -1894,34 +2028,63 @@ static void apply_setting_action(int act) {
       g_prefs.putInt("lang", g_lang);
       request_state(ST_SETTINGS);                      // redesenha tudo no novo idioma
       break;
+    case 10: request_state(ST_ABOUT); break;            // sobre / about
+    case 11: {                                          // heatmap: hoje -> 7d -> 30d -> tudo -> hoje
+      g_heatMode = (g_heatMode + 1) % 4;
+      g_prefs.putInt("heatm", g_heatMode);
+      if (g_heatLbl) {
+        const char *m[4] = {TRS("hoje", "today"), "7d", "30d", TRS("tudo", "all")};
+        char buf[48]; snprintf(buf, sizeof(buf), TRS(LV_SYMBOL_CHARGE "  Ritmo por hora: %s",
+                                                     LV_SYMBOL_CHARGE "  Hourly burn: %s"), m[g_heatMode]);
+        lv_label_set_text(g_heatLbl, buf);
+      }
+      break;
+    }
   }
 }
-static void add_info_row(lv_obj_t *p, const char *txt, uint32_t fg) {
-  lv_obj_t *b = lv_obj_create(p);
-  lv_obj_set_size(b, 444, 40);
-  lv_obj_set_style_bg_color(b, lv_color_hex(C_SURFACE), 0);
-  lv_obj_set_style_radius(b, 12, 0);
-  lv_obj_set_style_border_width(b, 0, 0);
-  lv_obj_t *l = mklabel(b, txt, &lv_font_montserrat_16, fg);
-  lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
+
+static void settings_action_cb(lv_event_t *e) {
+  int act = (int)(intptr_t)lv_event_get_user_data(e);
+  if (act == 4) {                                     // apagar tudo — exige 2 toques
+    if (!g_wipeArmed) {
+      g_wipeArmed = true;
+      if (g_wipeLbl) lv_label_set_text(g_wipeLbl, TRS(LV_SYMBOL_TRASH "  Toque de novo p/ confirmar",
+                                                      LV_SYMBOL_TRASH "  Tap again to confirm"));
+      return;
+    }
+    g_wipeArmed = false;
+  }
+  apply_setting_action(act);
 }
-// Sem touch: tela é só leitura. Ajustes de verdade são feitos via
-// http://claude-stick.local/settings (BOOT longo abre esta tela, BOOT
-// curto volta pro dashboard — ver boot_button_poll()).
+
+static void add_setting_row(lv_obj_t *p, const char *txt, int act, uint32_t fg, lv_obj_t **out) {
+  lv_obj_t *b = lv_button_create(p);
+  lv_obj_set_size(b, SCREEN_WIDTH - 16, 36);
+  lv_obj_set_style_bg_color(b, lv_color_hex(C_SURFACE), 0);
+  lv_obj_set_style_radius(b, 10, 0);
+  lv_obj_set_style_shadow_width(b, 0, 0);
+  lv_obj_t *l = mklabel(b, txt, &lv_font_montserrat_14, fg);
+  lv_obj_align(l, LV_ALIGN_LEFT_MID, 8, 0);
+  lv_obj_add_event_cb(b, settings_action_cb, LV_EVENT_CLICKED, (void *)(intptr_t)act);
+  if (out) *out = l;
+}
+
 static void ui_settings() {
   lv_obj_t *scr = lv_screen_active();
+  g_wipeArmed = false;
   start_data_web();
-  lv_obj_t *title = mklabel(scr, TRS("Ajustes (via navegador)", "Settings (via browser)"),
-                            &lv_font_montserrat_18, C_TEXT);
-  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 14, 10);
+  lv_obj_t *title = mklabel(scr, TRS("Ajustes", "Settings"), &lv_font_montserrat_18, C_TEXT);
+  lv_obj_align(title, LV_ALIGN_TOP_LEFT, 10, 8);
 
-  String url = String("claude-stick.local/settings");
-  lv_obj_t *hint = mklabel(scr, url.c_str(), &lv_font_montserrat_16, C_ACCENT);
-  lv_obj_align(hint, LV_ALIGN_TOP_LEFT, 14, 38);
+  lv_obj_t *bk = mkbtn(scr, LV_SYMBOL_LEFT, &lv_font_montserrat_14, C_SURFACE2, C_MUTED);
+  lv_obj_set_size(bk, 44, 28);
+  lv_obj_set_ext_click_area(bk, 8);
+  lv_obj_align(bk, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_add_event_cb(bk, nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)ST_MAIN);
 
   lv_obj_t *lst = lv_obj_create(scr);
-  lv_obj_set_pos(lst, 8, 70);
-  lv_obj_set_size(lst, 464, 242);
+  lv_obj_set_pos(lst, 8, 40);
+  lv_obj_set_size(lst, SCREEN_WIDTH - 16, SCREEN_HEIGHT - 40);
   lv_obj_set_style_bg_opa(lst, 0, 0);
   lv_obj_set_style_border_width(lst, 0, 0);
   lv_obj_set_style_pad_all(lst, 0, 0);
@@ -1944,16 +2107,27 @@ static void ui_settings() {
   if (g_slideSec) snprintf(slideTxt, sizeof(slideTxt), LV_SYMBOL_PLAY "  Slideshow: %ds", g_slideSec);
   else            snprintf(slideTxt, sizeof(slideTxt), "%s", TRS(LV_SYMBOL_PLAY "  Slideshow: desligado",
                                                                  LV_SYMBOL_PLAY "  Slideshow: off"));
-  add_info_row(lst, pollTxt, C_TEXT);
-  add_info_row(lst, slideTxt, C_TEXT);
-  add_info_row(lst, tzTxt, C_TEXT);
-  add_info_row(lst, bri, C_TEXT);
-  add_info_row(lst, TRS(LV_SYMBOL_LIST "  Idioma: Portugues", LV_SYMBOL_LIST "  Language: English"), C_TEXT);
+  const char *heatN[4] = {TRS("hoje", "today"), "7d", "30d", TRS("tudo", "all")};
+  char heatTxt[48]; snprintf(heatTxt, sizeof(heatTxt), TRS(LV_SYMBOL_CHARGE "  Ritmo por hora: %s",
+                                                           LV_SYMBOL_CHARGE "  Hourly burn: %s"), heatN[g_heatMode]);
 
-  lv_obj_t *foot = mklabel(scr, TRS("BOOT curto: volta  \xE2\x80\xA2  BOOT longo: sobre",
-                                    "BOOT short: back  \xE2\x80\xA2  BOOT long: about"),
-                           &lv_font_montserrat_12, C_FAINT);
-  lv_obj_align(foot, LV_ALIGN_BOTTOM_MID, 0, -6);
+  add_setting_row(lst, TRS(LV_SYMBOL_REFRESH "  Atualizar agora",
+                           LV_SYMBOL_REFRESH "  Refresh now"),   0, C_TEXT, nullptr);
+  add_setting_row(lst, pollTxt,                                  6, C_TEXT, &g_pollLbl);
+  add_setting_row(lst, slideTxt,                                 8, C_TEXT, &g_slideLbl);
+  add_setting_row(lst, tzTxt,                                    7, C_TEXT, &g_tzLbl);
+  add_setting_row(lst, bri,                                      3, C_TEXT, &g_briLbl);
+  add_setting_row(lst, heatTxt,                                 11, C_TEXT, &g_heatLbl);
+  add_setting_row(lst, TRS(LV_SYMBOL_LIST "  Idioma: Portugues",
+                           LV_SYMBOL_LIST "  Language: English"), 9, C_TEXT, nullptr);
+  add_setting_row(lst, TRS(LV_SYMBOL_WIFI "  Configurar WiFi",
+                           LV_SYMBOL_WIFI "  Configure WiFi"),   1, C_TEXT, nullptr);
+  add_setting_row(lst, TRS(LV_SYMBOL_KEYBOARD "  Trocar token",
+                           LV_SYMBOL_KEYBOARD "  Change token"), 2, C_TEXT, nullptr);
+  add_setting_row(lst, TRS(LV_SYMBOL_FILE "  Sobre",
+                           LV_SYMBOL_FILE "  About"),           10, C_TEXT, nullptr);
+  add_setting_row(lst, TRS(LV_SYMBOL_TRASH "  Apagar tudo",
+                           LV_SYMBOL_TRASH "  Erase everything"), 4, C_BAD, &g_wipeLbl);
 }
 
 // ============================================================
@@ -1962,6 +2136,12 @@ static void ui_settings() {
 static void ui_about() {
   lv_obj_t *scr = lv_screen_active();
   start_data_web();
+
+  lv_obj_t *bk = mkbtn(scr, LV_SYMBOL_LEFT, &lv_font_montserrat_14, C_SURFACE2, C_MUTED);
+  lv_obj_set_size(bk, 44, 28);
+  lv_obj_set_ext_click_area(bk, 8);
+  lv_obj_align(bk, LV_ALIGN_TOP_RIGHT, -8, 6);
+  lv_obj_add_event_cb(bk, nav_cb, LV_EVENT_CLICKED, (void *)(intptr_t)ST_SETTINGS);
 
   lv_obj_t *mark = build_claude_mark(scr);
   lv_obj_align(mark, LV_ALIGN_TOP_MID, 0, 0);
@@ -1983,10 +2163,6 @@ static void ui_about() {
   lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(d, LV_LABEL_LONG_WRAP);
   lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 122);
-
-  lv_obj_t *foot = mklabel(scr, TRS("BOOT curto: volta ao dashboard", "BOOT short: back to dashboard"),
-                           &lv_font_montserrat_12, C_FAINT);
-  lv_obj_align(foot, LV_ALIGN_BOTTOM_MID, 0, -6);
 }
 
 // ============================================================
@@ -2002,13 +2178,15 @@ static void render_state() {
   g_mascN = 0;
   g_provMsg = nullptr;
   g_hdrStatus = nullptr;
-  g_briLbl = g_pollLbl = g_tzLbl = g_slideLbl = nullptr;
+  g_pinDots = g_pinMsg = nullptr;
+  g_briLbl = g_pollLbl = g_tzLbl = g_slideLbl = g_heatLbl = nullptr;
 
   lv_obj_clean(lv_screen_active());
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(C_BG), 0);
   lv_obj_set_style_bg_opa(lv_screen_active(), LV_OPA_COVER, 0);
 
   switch (g_state) {
+    case ST_PIN:       ui_pin(); break;
     case ST_PROVISION: ui_provision(); break;
     case ST_LOADING:   ui_loading(g_wifi.isConnected() ? g_wifi.getSSID().c_str()
                                                        : TRS("conectando WiFi", "connecting WiFi")); break;
@@ -2115,6 +2293,12 @@ void setup() {
   lv_display_set_flush_cb(disp, disp_flush_cb);
   lv_display_set_buffers(disp, buf1, buf2, bufSize, LV_DISPLAY_RENDER_MODE_PARTIAL);
 
+  // Touch — XPT2046, SPI dedicado (HSPI), validado no bring-up
+  if (!g_touch.begin()) Serial.println("touch: begin() falhou");
+  lv_indev_t *touch_indev = lv_indev_create();
+  lv_indev_set_type(touch_indev, LV_INDEV_TYPE_POINTER);
+  lv_indev_set_read_cb(touch_indev, touch_read_cb);
+
   load_persisted();
   apply_brightness();
 
@@ -2123,15 +2307,14 @@ void setup() {
 
   g_wifi.begin();
 
-  // Boot automático: com WiFi salvo conectando e token+PIN batendo, decifra
-  // sozinho e cai direto no dashboard. Qualquer coisa fora disso (sem WiFi
-  // salvo, falha de conexão, sem token/PIN ainda) cai no portal de
-  // provisionamento como antes — ver ui_provision()/start_provision_web().
+  // Boot: com WiFi salvo conectando e token já configurado, pede o PIN por
+  // touch pra decifrar (ST_PIN — nunca mais fica salvo em claro na NVS).
+  // Sem WiFi salvo ou sem token ainda cai no portal de provisionamento —
+  // ver ui_provision()/start_provision_web().
   bool wifiOk = g_wifi.autoConnect(WIFI_CONNECT_TIMEOUT_MS);
-  if (wifiOk && g_hasToken && g_savedPin[0] &&
-      decryptToken(g_blob, g_savedPin, g_token, sizeof(g_token))) {
-    g_pinAttempts = 0; save_attempts();
-    request_state(ST_LOADING);
+  if (wifiOk && g_hasToken) {
+    g_pinForSettings = false;
+    request_state(ST_PIN);
   } else {
     request_state(ST_PROVISION);
   }

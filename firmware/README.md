@@ -12,10 +12,15 @@ Firmware para a tela touch **Guition JC4832W535** (AXS15231B QSPI, 480×320).
 - **`REFERENCIA-HARDWARE-LVGL.md`** — pinos, libs testadas, pipeline de flush
   (rotação 270° CW na mão) e armadilhas (PSRAM OPI obrigatória, etc.).
 - **`claude_stick_cyd/`** — fork pra **ESP32-2432S028** ("Cheap Yellow
-  Display", ESP32 clássico sem PSRAM, 320×240, sem touch): navegação por
-  botão físico BOOT, provisionamento e ajustes via formulário web em vez de
-  teclado touch. Veja [`claude_stick_cyd/README.md`](claude_stick_cyd/README.md).
-- **`bringup_cyd/`** — bring-up validado dessa placa (pinos do display,
-  tentativas de touch documentadas).
+  Display", ESP32 clássico sem PSRAM, 320×240). Touch **XPT2046** resistivo
+  (chip U3, barramento SPI dedicado — pinos confirmados no manual do
+  fabricante, `bringup_cyd/Manual_Pinagem_Foto.pdf`): navegação e ajustes
+  nativos por toque, PIN pedido a cada boot. Botão físico BOOT e portal web
+  (`claude-stick.local`) continuam como fallback (provisionamento inicial de
+  WiFi/token e reconfiguração remota). Veja
+  [`claude_stick_cyd/README.md`](claude_stick_cyd/README.md).
+- **`bringup_cyd/`** — bring-up validado dessa placa (pinos do display e do
+  touch XPT2046, sketch de calibração — toque nos 4 cantos e leia os valores
+  no Serial).
 
 Comece por [`../README.md`](../README.md) para a visão geral e o passo a passo de build.

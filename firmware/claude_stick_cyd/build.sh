@@ -10,7 +10,8 @@
 #
 # Pré-requisitos: arduino-cli, core esp32:esp32, libs GFX Library for
 # Arduino 1.6.5 + lvgl 9.2.2 + ArduinoJson 7.2.0 (ver firmware/claude_stick/
-# build.sh — mesmas versões, biblioteca compartilhada).
+# build.sh — mesmas versões, biblioteca compartilhada) + XPT2046_Touchscreen
+# (touch resistivo, SPI dedicado — ver touch.h).
 #
 # Upload a 921600 falha nesse conversor serial (CH340/CP2102) — 115200 é o
 # que funciona de forma confiável (validado no bring-up).
