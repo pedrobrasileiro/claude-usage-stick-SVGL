@@ -12,8 +12,12 @@
  * plano). Navegação via botão físico BOOT (clique curto = próxima tela do
  * dashboard; clique longo = ajustes). Configuração (WiFi + token + PIN) e
  * ajustes finos via portal web (AP no primeiro uso, depois
- * claude-stick.local) — PIN pedido a cada boot, mesma cifra AES-256-GCM do
- * app original, só que digitado no navegador em vez de teclado na tela.
+ * claude-stick.local) — mesma cifra AES-256-GCM do app original. Boot
+ * decifra o token sozinho usando o PIN salvo na NVS (sem prompt); o PIN só
+ * é pedido de novo pra entrar em /settings (troca de token, apagar tudo
+ * etc.). Trade-off: PIN em NVS sem flash encryption é recuperável com
+ * acesso físico/dump ao device — mesmo risco que as demais configs já
+ * salvas em claro hoje.
  *
  * Tokens por sessao: a API nao expoe contagem para conta de assinatura; um
  * bridge opcional (tools/token_bridge.py) soma os transcripts locais do
@@ -100,8 +104,10 @@ static TokenStats g_tok = {0, 0, 0, 0, 0};
 static EncryptedBlob g_blob;
 static bool g_hasToken = false;              // existe blob salvo no NVS
 static char g_token[200] = {0};              // token decifrado (só em RAM)
+static char g_savedPin[PIN_LEN + 1] = {0};   // PIN salvo em claro na NVS (decrypt automático no boot)
 static int  g_pinAttempts = 0;               // tentativas erradas (persistido)
 static uint32_t g_lockoutUntil = 0;          // millis até liberar nova tentativa
+static uint32_t g_settingsUnlockedUntil = 0; // millis até expirar sessão de /settings desbloqueado
 static bool g_timeInit = false;
 static bool g_forceWifi = false;             // "Configurar WiFi" pediu reconfiguração
 static bool g_forceToken = false;            // "Trocar token" pediu novo token
@@ -323,6 +329,8 @@ static void load_persisted() {
     g_hasToken = true;
   }
   g_pinAttempts = g_prefs.getInt("pinatt", 0);
+  String p = g_prefs.getString("pin", "");
+  strlcpy(g_savedPin, p.c_str(), sizeof(g_savedPin));
   g_briIdx = g_prefs.getInt("bri", 1);
   if (g_briIdx < 0 || g_briIdx > 2) g_briIdx = 1;
   g_pollSec = g_prefs.getInt("poll", DEFAULT_POLL_SEC);
@@ -341,10 +349,11 @@ static void save_attempts() { g_prefs.putInt("pinatt", g_pinAttempts); }
 static void apply_brightness() { ledcWrite(TFT_BL, BRI_LEVELS[g_briIdx]); }
 
 static void factory_reset() {
-  g_prefs.clear();              // apaga blob, pinatt, bri do namespace claude
+  g_prefs.clear();              // apaga blob, pin, pinatt, bri do namespace claude
   g_wifi.forgetAll();
   g_hasToken = false;
   g_token[0] = 0;
+  g_savedPin[0] = 0;
   g_pinAttempts = 0;
   Serial.println("[RESET] tudo apagado");
 }
@@ -484,8 +493,84 @@ static String settings_page(const char *msg) {
          "</div></body></html>");
   return h;
 }
-static void handleSettingsGet() { g_web->send(200, "text/html; charset=utf-8", settings_page("")); }
+// Confere PIN contra g_blob, aplicando o mesmo lockout exponencial/wipe do
+// desbloqueio de boot. Retorna true só quando o PIN bate (e zera as
+// tentativas); preenche errMsg com mensagem pronta pra UI em caso de espera/
+// erro/wipe. wipedOut (se não-nulo) sai true quando o limite de tentativas
+// estourou e factory_reset() já rodou. tokenOut/tokenOutLen (se não-nulo)
+// recebem o token decifrado — sem eles o decrypt só serve pra validar o PIN.
+static bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool *wipedOut = nullptr,
+                                   char *tokenOut = nullptr, size_t tokenOutLen = 0) {
+  if (wipedOut) *wipedOut = false;
+  if (millis() < g_lockoutUntil) {
+    int rem = (g_lockoutUntil - millis()) / 1000;
+    snprintf(errMsg, errLen, TRS("Aguarde %ds", "Wait %ds"), rem);
+    return false;
+  }
+  char tmp[200];
+  char *dst = tokenOut ? tokenOut : tmp;
+  size_t dstLen = tokenOut ? tokenOutLen : sizeof(tmp);
+  if (decryptToken(g_blob, pin.c_str(), dst, dstLen)) {
+    g_pinAttempts = 0; save_attempts();
+    return true;
+  }
+  g_pinAttempts++; save_attempts();
+  if (g_pinAttempts >= MAX_PIN_ATTEMPTS) {
+    Serial.println("[PIN] limite estourado -> wipe");
+    factory_reset();
+    g_forceWifi = true; g_forceToken = true;
+    if (wipedOut) *wipedOut = true;
+    snprintf(errMsg, errLen, "%s",
+             TRS("PIN errado demais vezes — tudo apagado. Configure de novo.",
+                 "Wrong PIN too many times — everything wiped. Reconfigure."));
+    request_state(ST_PROVISION);
+    return false;
+  }
+  int wait = LOCKOUT_BASE_SEC * (1 << (g_pinAttempts - 1));
+  if (wait > 3600) wait = 3600;
+  g_lockoutUntil = millis() + (uint32_t)wait * 1000;
+  snprintf(errMsg, errLen, TRS("PIN errado (%d/%d). Aguarde %ds", "Wrong PIN (%d/%d). Wait %ds"),
+           g_pinAttempts, MAX_PIN_ATTEMPTS, wait);
+  return false;
+}
+
+static bool settings_unlocked() { return millis() < g_settingsUnlockedUntil; }
+
+static String settings_pin_page(const char *msg) {
+  String h = F("<!doctype html><html lang=pt><head><meta charset=utf-8>"
+               "<meta name=viewport content='width=device-width,initial-scale=1'>"
+               "<title>Claude Usage Stick — Ajustes</title><style>" WEB_CSS "</style></head><body><div class=card>"
+               "<h1>" WEB_SPARK " Ajustes</h1>");
+  if (msg && msg[0]) { h += F("<p style='color:#F87171'>"); h += msg; h += F("</p>"); }
+  h += F("<p>Digite o PIN pra acessar os ajustes:</p>"
+         "<form method=POST action='/settings/unlock'>"
+         "<input name=pin inputmode=numeric maxlength=4 autofocus placeholder='PIN' "
+         "style='width:100%;padding:12px;border-radius:10px;border:1px solid #30303A;"
+         "background:#0F0F12;color:#F2F0EC;font-size:14px;margin-bottom:10px'>"
+         "<button type=submit>Entrar</button></form></div></body></html>");
+  return h;
+}
+
+static void handleSettingsGet() {
+  g_web->send(200, "text/html; charset=utf-8",
+              settings_unlocked() ? settings_page("") : settings_pin_page(""));
+}
+static void handleSettingsUnlockPost() {
+  String pin = g_web->arg("pin"); pin.trim();
+  char err[80] = {0};
+  if (verify_pin_or_lockout(pin, err, sizeof(err))) {
+    g_settingsUnlockedUntil = millis() + SETTINGS_SESSION_MS;
+    g_web->send(200, "text/html; charset=utf-8", settings_page(""));
+  } else {
+    g_web->send(200, "text/html; charset=utf-8", settings_pin_page(err));
+  }
+}
 static void handleSettingsPost() {
+  if (!settings_unlocked()) {
+    g_web->send(200, "text/html; charset=utf-8", settings_pin_page(TRS("Digite o PIN primeiro.", "Enter the PIN first.")));
+    return;
+  }
+  g_settingsUnlockedUntil = millis() + SETTINGS_SESSION_MS;   // renova a sessão a cada ação
   int act = g_web->arg("act").toInt();
   if (act == 4 && g_web->arg("confirm") != "1") {
     g_web->send(200, "text/html; charset=utf-8", settings_page("Não confirmado."));
@@ -509,6 +594,7 @@ static void start_data_web() {
   g_web->on("/tokens", HTTP_POST, handleTokensPost);
   g_web->on("/settings", HTTP_GET, handleSettingsGet);
   g_web->on("/settings", HTTP_POST, handleSettingsPost);
+  g_web->on("/settings/unlock", HTTP_POST, handleSettingsUnlockPost);
   g_web->onNotFound([]() { g_web->send(404, "application/json", "{\"error\":\"not_found\"}"); });
   g_web->begin();
 }
@@ -644,6 +730,8 @@ static void handleProvisionPost() {
       return;
     }
     save_blob();
+    g_prefs.putString("pin", pin);
+    strlcpy(g_savedPin, pin.c_str(), sizeof(g_savedPin));
     strlcpy(g_token, token.c_str(), sizeof(g_token));
     g_usage = tmp;
     g_hasToken = true; g_forceToken = false;
@@ -654,12 +742,6 @@ static void handleProvisionPost() {
   }
 
   // Desbloqueio: blob já existe, só confere o PIN
-  if (millis() < g_lockoutUntil) {
-    int rem = (g_lockoutUntil - millis()) / 1000;
-    char m[48]; snprintf(m, sizeof(m), TRS("Aguarde %ds", "Wait %ds"), rem);
-    g_web->send(200, "text/html; charset=utf-8", provision_page(false, false, m));
-    return;
-  }
   {
     String pin2 = g_web->arg("pin2"); pin2.trim();
     if (pin != pin2) {
@@ -669,28 +751,18 @@ static void handleProvisionPost() {
       return;
     }
   }
-  if (decryptToken(g_blob, pin.c_str(), g_token, sizeof(g_token))) {
-    g_pinAttempts = 0; save_attempts();
+  char err[80] = {0};
+  bool wiped = false;
+  if (verify_pin_or_lockout(pin, err, sizeof(err), &wiped, g_token, sizeof(g_token))) {
+    g_prefs.putString("pin", pin);           // re-sincroniza pro boot automático seguinte
+    strlcpy(g_savedPin, pin.c_str(), sizeof(g_savedPin));
     g_web->send(200, "text/html; charset=utf-8", provision_done_page());
     request_state(ST_LOADING);
   } else {
-    g_pinAttempts++; save_attempts();
-    if (g_pinAttempts >= MAX_PIN_ATTEMPTS) {
-      Serial.println("[PIN] limite estourado -> wipe");
-      factory_reset();
-      g_forceWifi = true; g_forceToken = true;
-      g_web->send(200, "text/html; charset=utf-8",
-                  provision_page(true, true, "PIN errado demais vezes — tudo apagado. Configure de novo."));
-      request_state(ST_PROVISION);
-      return;
-    }
-    int wait = LOCKOUT_BASE_SEC * (1 << (g_pinAttempts - 1));
-    if (wait > 3600) wait = 3600;
-    g_lockoutUntil = millis() + (uint32_t)wait * 1000;
-    char m[80];
-    snprintf(m, sizeof(m), TRS("PIN errado (%d/%d). Aguarde %ds", "Wrong PIN (%d/%d). Wait %ds"),
-             g_pinAttempts, MAX_PIN_ATTEMPTS, wait);
-    g_web->send(200, "text/html; charset=utf-8", provision_page(false, false, m));
+    // wipe já chamou request_state(ST_PROVISION) e setou g_forceWifi/
+    // g_forceToken dentro do helper; nesse caso o formulário certo é o
+    // completo (wifi+token), senão só o de PIN.
+    g_web->send(200, "text/html; charset=utf-8", provision_page(wiped, wiped, err));
   }
 }
 
@@ -2051,9 +2123,18 @@ void setup() {
 
   g_wifi.begin();
 
-  // Sempre passa pelo portal de provisionamento: pede PIN a cada boot (ou
-  // WiFi/token se ainda não configurados) — ver ui_provision()/start_provision_web().
-  request_state(ST_PROVISION);
+  // Boot automático: com WiFi salvo conectando e token+PIN batendo, decifra
+  // sozinho e cai direto no dashboard. Qualquer coisa fora disso (sem WiFi
+  // salvo, falha de conexão, sem token/PIN ainda) cai no portal de
+  // provisionamento como antes — ver ui_provision()/start_provision_web().
+  bool wifiOk = g_wifi.autoConnect(WIFI_CONNECT_TIMEOUT_MS);
+  if (wifiOk && g_hasToken && g_savedPin[0] &&
+      decryptToken(g_blob, g_savedPin, g_token, sizeof(g_token))) {
+    g_pinAttempts = 0; save_attempts();
+    request_state(ST_LOADING);
+  } else {
+    request_state(ST_PROVISION);
+  }
 }
 
 void loop() {

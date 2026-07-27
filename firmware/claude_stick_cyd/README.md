@@ -46,18 +46,19 @@ por um **formulário HTML simples** servido pelo próprio device:
 2. **Depois de configurado**: a placa conecta na sua WiFi normal (modo
    STA) e o mesmo formulário fica disponível em
    **`http://claude-stick.local`** (mDNS) — ou pelo IP mostrado na tela.
-3. **A cada boot seguinte**: a tela mostra só "acesse
-   claude-stick.local pra configurar" até você digitar o **PIN** nesse
-   endereço. Sem PIN certo, sem dashboard — mesmo modelo de segurança do
-   original (AES-256-GCM + PIN), só que o PIN é digitado no navegador em
-   vez do teclado da tela. O formulário pede o PIN **duas vezes**
-   (campo + confirmação): sem touch na tela pra corrigir um erro de
-   digitação na hora, é melhor travar antes de gastar uma das 10
-   tentativas (errar demais **apaga tudo** e volta pro início).
+3. **A cada boot seguinte**: liga e vai direto pro dashboard, sem pedir
+   PIN — a placa guarda o PIN na NVS do device e decifra o token
+   sozinha (mesma cifra AES-256-GCM do original, só que a chave "mora"
+   no device em vez de ser digitada toda vez). Trade-off: quem tiver
+   acesso físico ao device (ou um dump da flash) consegue ler esse PIN
+   salvo — mesmo risco que os outros ajustes já gravados em claro hoje
+   (brilho, fuso etc.).
 4. **Ajustes** (brilho / intervalo / fuso / slideshow / idioma / trocar
    WiFi / trocar token / apagar tudo): clique longo no BOOT abre a tela
    "Ajustes" no display, que mostra a URL (`claude-stick.local/settings`)
-   pra abrir no navegador e mexer nas opções.
+   pra abrir no navegador. Essa página **pede o PIN** antes de liberar
+   qualquer ajuste (sessão de 5 minutos) — mesmo lockout progressivo e
+   apaga-tudo em 10 tentativas erradas do desbloqueio de antes.
 
 Não existe captive portal automático — o SSID/IP aparecem na própria
 tela do device em cada etapa.
@@ -68,7 +69,8 @@ tela do device em cada etapa.
    **"Ajustes"** (curto muda de tile no dashboard; longo abre Ajustes →
    Sobre → volta pro dashboard).
 2. A tela de Ajustes mostra a URL `claude-stick.local/settings` — abre
-   essa página no navegador (celular/notebook na mesma rede WiFi).
+   essa página no navegador (celular/notebook na mesma rede WiFi) e
+   digita o **PIN** quando pedido.
 3. Clica em **"Trocar token"**. O formulário volta a pedir o **token
    OAuth novo** + um **PIN** (pode ser o mesmo de antes ou um novo — os
    dois campos de confirmação valem aqui também).

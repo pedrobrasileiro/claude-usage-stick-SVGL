@@ -39,6 +39,7 @@
 #define MAX_PIN_ATTEMPTS        10
 #define LOCKOUT_BASE_SEC        60       // dobra a cada falha
 #define KDF_ROUNDS              10000
+#define SETTINGS_SESSION_MS     (5UL * 60UL * 1000UL)  // sessão de /settings desbloqueada
 
 // ── Rede / API Claude ────────────────────────────────────
 #define WIFI_CONNECT_TIMEOUT_MS 8000
