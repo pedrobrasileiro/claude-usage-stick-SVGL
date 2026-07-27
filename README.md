@@ -26,7 +26,8 @@ Navigate by **swiping** (the dots at the bottom show your position; the active o
 pill). The **gear** opens Settings. The thin **coral bar** below the header counts down to the
 next refresh — tapping it refreshes immediately.
 
-### 1. Now (*Agora*)
+### 1. Now (_Agora_)
+
 <img src="assets/mock-agora.png" width="400" align="right" alt="Now screen">
 
 - Two big cards: **5-hour window** and **week (7-day) window**.
@@ -39,7 +40,8 @@ next refresh — tapping it refreshes immediately.
 
 <br clear="right">
 
-### 2. Models (*Modelos*)
+### 2. Models (_Modelos_)
+
 <img src="assets/mock-modelos.png" width="400" align="right" alt="Models screen">
 
 - The 4 Clawd mascots (Haiku / Sonnet / Opus / Fable) with a **live status pill** under each one,
@@ -50,17 +52,19 @@ next refresh — tapping it refreshes immediately.
 
 <br clear="right">
 
-### 3. 5-hour window (*Janela de 5h*)
+### 3. 5-hour window (_Janela de 5h_)
+
 <img src="assets/mock-janela5h.png" width="400" align="right" alt="5-hour window screen">
 
 - Custom chart with the **X axis spanning exactly the current 5 h window** (start → reset).
 - Solid coral line = real usage history; **dotted line = projection** at the current burn rate.
-- Plain-language verdict, color-coded: *"At the current rate, runs out at 16:40 (in 1h32m)"*
-  (amber/red) or *"Does NOT run out before the reset (~62%)"* (green).
+- Plain-language verdict, color-coded: _"At the current rate, runs out at 16:40 (in 1h32m)"_
+  (amber/red) or _"Does NOT run out before the reset (~62%)"_ (green).
 
 <br clear="right">
 
-### 4. Hourly rhythm (*Ritmo por hora*)
+### 4. Hourly rhythm (_Ritmo por hora_)
+
 <img src="assets/mock-ritmo.png" width="400" align="right" alt="Hourly rhythm screen">
 
 - **Usage by hour of day**: 24 bars whose height/brightness show which hours burn the most quota;
@@ -71,6 +75,7 @@ next refresh — tapping it refreshes immediately.
 <br clear="right">
 
 ### Threshold moments (animations)
+
 <img src="assets/mock-momento.png" width="400" align="right" alt="Threshold moment overlay">
 
 Whenever a window crosses **25 % / 50 % / 70 % / 100 %**, a full-screen animated "moment" pops
@@ -86,7 +91,7 @@ The header and the token/loading screens use the **official Claude Code pixel lo
 
 <br clear="right">
 
-### Settings (*Ajustes*)
+### Settings (_Ajustes_)
 
 Opened from the gear (scrollable list, 44 px touch rows):
 
@@ -106,12 +111,12 @@ Opened from the gear (scrollable list, 44 px touch rows):
 
 ## Hardware
 
-| | |
-|---|---|
-| Screen | **Mini ESP32-S3 3.5" Capacitive Touch IPS · 480×320 · 8 MB PSRAM · 16 MB Flash** ([AliExpress](https://pt.aliexpress.com/item/1005007641039070.html)) |
-| Chip | ESP32-S3 (native USB) |
-| Display | **AXS15231B**, QSPI interface |
-| Touch | **AXS15231B** capacitive, I²C `0x3B` |
+|         |                                                                                                                                                       |
+| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Screen  | **Mini ESP32-S3 3.5" Capacitive Touch IPS · 480×320 · 8 MB PSRAM · 16 MB Flash** ([AliExpress](https://pt.aliexpress.com/item/1005007641039070.html)) |
+| Chip    | ESP32-S3 (native USB)                                                                                                                                 |
+| Display | **AXS15231B**, QSPI interface                                                                                                                         |
+| Touch   | **AXS15231B** capacitive, I²C `0x3B`                                                                                                                  |
 
 > **OPI PSRAM is mandatory** — the 480×320 LVGL buffer doesn't fit in internal RAM.
 
@@ -159,7 +164,7 @@ the **local Claude Code transcripts** (`~/.claude/projects/**/*.jsonl`).
 [`tools/token_bridge.py`](tools/token_bridge.py) (stdlib only) closes that gap: it asks the device
 for the current window (`GET http://claude-stick.local/window`), sums the transcript `usage`
 entries since the window start (deduped by message id) and pushes them back
-(`POST /tokens`). The "Now" screen then shows *"tokens na janela: 1.2M entrada • 88k saida"*.
+(`POST /tokens`). The "Now" screen then shows _"tokens na janela: 1.2M entrada • 88k saida"_.
 
 ```bash
 python3 tools/token_bridge.py               # one shot
@@ -206,6 +211,11 @@ negligible**.
 Prerequisites (tested versions):
 
 - `arduino-cli` 1.4.x · core `esp32:esp32` **3.3.8**
+
+```bash
+$ arduino-cli core install esp32:esp32
+```
+
 - libraries: **GFX Library for Arduino** 1.6.5 · **lvgl** 9.2.2
 
 ```bash
