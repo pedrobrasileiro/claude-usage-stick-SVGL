@@ -56,7 +56,7 @@
 #define LV_FONT_DEFAULT &lv_font_montserrat_14
 
 /*====================
-   WIDGETS usados (sem touch: sem buttonmatrix/list/textarea/keyboard)
+   WIDGETS usados (buttonmatrix pro keypad touch; sem list/textarea/keyboard)
  *====================*/
 #define LV_USE_LABEL        1
 #define LV_USE_BUTTON       1
