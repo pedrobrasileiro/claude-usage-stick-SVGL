@@ -4,12 +4,8 @@
 #include "storage.h"
 #include "config.h"
 
-// Confere PIN contra g_blob, aplicando o mesmo lockout exponencial/wipe do
-// desbloqueio de boot. Retorna true só quando o PIN bate (e zera as
-// tentativas); preenche errMsg com mensagem pronta pra UI em caso de espera/
-// erro/wipe. wipedOut (se não-nulo) sai true quando o limite de tentativas
-// estourou e factory_reset() já rodou. tokenOut/tokenOutLen (se não-nulo)
-// recebem o token decifrado — sem eles o decrypt só serve pra validar o PIN.
+// Confere PIN contra g_blob, aplicando lockout exponencial (10s base,
+// dobra a cada falha, sem limite de tentativas e sem wipe).
 bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool *wipedOut,
                             char *tokenOut, size_t tokenOutLen) {
   if (wipedOut) *wipedOut = false;
@@ -26,22 +22,11 @@ bool verify_pin_or_lockout(const String &pin, char *errMsg, size_t errLen, bool 
     return true;
   }
   g_pinAttempts++; save_attempts();
-  if (g_pinAttempts >= MAX_PIN_ATTEMPTS) {
-    Serial.println("[PIN] limite estourado -> wipe");
-    factory_reset();
-    g_forceWifi = true; g_forceToken = true;
-    if (wipedOut) *wipedOut = true;
-    snprintf(errMsg, errLen, "%s",
-             TRS("PIN errado demais vezes — tudo apagado. Configure de novo.",
-                 "Wrong PIN too many times — everything wiped. Reconfigure."));
-    request_state(ST_PROVISION);
-    return false;
-  }
   int wait = LOCKOUT_BASE_SEC * (1 << (g_pinAttempts - 1));
   if (wait > 3600) wait = 3600;
+  g_lockoutStartMs = millis();
   g_lockoutUntil = millis() + (uint32_t)wait * 1000;
-  snprintf(errMsg, errLen, TRS("PIN errado (%d/%d). Aguarde %ds", "Wrong PIN (%d/%d). Wait %ds"),
-           g_pinAttempts, MAX_PIN_ATTEMPTS, wait);
+  snprintf(errMsg, errLen, TRS("PIN errado. Aguarde %ds", "Wrong PIN. Wait %ds"), wait);
   return false;
 }
 

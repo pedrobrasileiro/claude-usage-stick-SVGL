@@ -16,6 +16,7 @@ extern char g_pinEntry[PIN_LEN + 1];       // dígitos sendo digitados na tela d
 extern bool g_pinForSettings;              // ST_PIN entrado pra gatear /Ajustes (não pra decifrar no boot)
 extern int  g_pinAttempts;                 // tentativas erradas (persistido)
 extern uint32_t g_lockoutUntil;            // millis até liberar nova tentativa
+extern uint32_t g_lockoutStartMs;          // millis de quando o lockout comecou
 extern uint32_t g_settingsUnlockedUntil;   // millis até expirar sessão de Ajustes desbloqueado
 
 // Confere PIN contra g_blob, aplicando o mesmo lockout exponencial/wipe do

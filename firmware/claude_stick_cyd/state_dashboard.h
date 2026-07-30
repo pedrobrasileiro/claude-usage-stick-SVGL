@@ -16,6 +16,7 @@
 struct DashUI {
   lv_obj_t *tv, *tile[NTILES], *dots[NTILES];
   lv_obj_t *refBar;
+  lv_obj_t *errInd;               // indicador de erro (circulo verde/amb/vermelho)
   // agora (overview + reset mesclados)
   lv_obj_t *agChip, *agPct5, *agCd5, *agAt5;
   lv_obj_t *agPct7, *agCd7, *agAt7, *agTok;
@@ -43,4 +44,4 @@ extern lv_point_precise_t g_mXPts[NMODELS][4][2];   // olhos em X (mood 3)
 
 // ---- Ponteiros reusados entre telas (header do dashboard / PIN) ----
 extern lv_obj_t *g_hdrStatus;   // texto de status no cabeçalho do dashboard
-extern lv_obj_t *g_pinDots, *g_pinMsg;
+extern lv_obj_t *g_pinDots, *g_pinMsg, *g_pinLockBar;

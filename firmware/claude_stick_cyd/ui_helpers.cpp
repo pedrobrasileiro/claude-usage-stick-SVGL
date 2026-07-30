@@ -196,6 +196,7 @@ void build_accessory(lv_obj_t *c, int model) {
 }
 
 void build_model_mascot(lv_obj_t *parent, int cx, int i) {
+  if (!g_provider->hasModelProbing()) return;  // OpenCode nao tem mascotes
   if (g_mascN >= NMODELS) return;
   int mood = model_mood(i);
   int baseY = 14;

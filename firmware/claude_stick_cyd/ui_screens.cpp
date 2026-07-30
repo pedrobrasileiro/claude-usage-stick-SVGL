@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <WiFi.h>
 #include "ui_screens.h"
 #include "state_app.h"
 #include "state_security.h"
@@ -80,11 +81,28 @@ void ui_pin() {
   lv_obj_align(g_pinDots, LV_ALIGN_TOP_MID, 0, 36);
   pin_update_dots();
 
-  g_pinMsg = mklabel(scr, g_pinForSettings ? TRS("Acesso aos ajustes", "Access to settings")
-                                            : TRS("Necessario p/ desbloquear o token",
-                                                  "Needed to unlock the token"),
-                     &lv_font_montserrat_12, C_MUTED);
+  // Mensagem de erro / lockout
+  g_pinMsg = mklabel(scr, "", &lv_font_montserrat_12, C_BAD);
   lv_obj_align(g_pinMsg, LV_ALIGN_TOP_MID, 0, 62);
+
+  // Barra de lockout (diminui com o tempo, igual barra de refresh)
+  g_pinLockBar = lv_bar_create(scr);
+  lv_obj_set_size(g_pinLockBar, 180, 6);
+  lv_bar_set_range(g_pinLockBar, 0, 1000);
+  lv_bar_set_value(g_pinLockBar, 0, LV_ANIM_OFF);
+  lv_obj_set_style_bg_color(g_pinLockBar, lv_color_hex(C_TRACK), LV_PART_MAIN);
+  lv_obj_set_style_bg_color(g_pinLockBar, lv_color_hex(C_WARN), LV_PART_INDICATOR);
+  lv_obj_set_style_radius(g_pinLockBar, 3, LV_PART_MAIN);
+  lv_obj_set_style_radius(g_pinLockBar, 3, LV_PART_INDICATOR);
+  lv_obj_align(g_pinLockBar, LV_ALIGN_TOP_MID, 0, 80);
+
+  if (millis() < g_lockoutUntil) {
+    uint32_t totalMs = g_lockoutUntil - g_lockoutStartMs;
+    uint32_t elapsed = millis() - g_lockoutStartMs;
+    int val = totalMs > 0 ? (int)(1000 - (uint64_t)elapsed * 1000 / totalMs) : 0;
+    if (val < 0) val = 0;
+    lv_bar_set_value(g_pinLockBar, val, LV_ANIM_OFF);
+  }
 
   lv_obj_t *bm = lv_buttonmatrix_create(scr);
   lv_buttonmatrix_set_map(bm, pin_map);
@@ -96,12 +114,6 @@ void ui_pin() {
   lv_obj_set_style_bg_color(bm, lv_color_hex(C_SURFACE2), LV_PART_ITEMS);
   lv_obj_set_style_text_color(bm, lv_color_hex(C_TEXT), LV_PART_ITEMS);
   lv_obj_add_event_cb(bm, pin_kb_cb, LV_EVENT_VALUE_CHANGED, NULL);
-
-  if (millis() < g_lockoutUntil && g_pinMsg) {
-    int rem = (g_lockoutUntil - millis()) / 1000;
-    char m[48]; snprintf(m, sizeof(m), TRS("Aguarde %ds", "Wait %ds"), rem);
-    lv_label_set_text(g_pinMsg, m);
-  }
 }
 
 void open_settings() {
@@ -126,8 +138,11 @@ void ui_message(const char *title, const char *sub, uint32_t color) {
 }
 void ui_loading(const char *sub) {
   lv_obj_t *scr = lv_screen_active();
-  lv_obj_t *mark = build_claude_mark(scr);
-  lv_obj_align(mark, LV_ALIGN_CENTER, 0, -50);
+  if (g_provider->logoBig()) {
+    lv_obj_t *img = lv_image_create(scr);
+    lv_image_set_src(img, g_provider->logoBig());
+    lv_obj_align(img, LV_ALIGN_CENTER, 0, -50);
+  }
   lv_obj_t *t = mklabel(scr, TRS("Carregando seu uso...", "Loading your usage..."), &lv_font_montserrat_18, C_TEXT);
   lv_obj_align(t, LV_ALIGN_CENTER, 0, 28);
   if (sub && sub[0]) {
@@ -139,7 +154,7 @@ void ui_loading(const char *sub) {
   lv_obj_set_size(spn, 34, 34);
   lv_obj_align(spn, LV_ALIGN_CENTER, 0, 90);
   lv_obj_set_style_arc_color(spn, lv_color_hex(C_SURFACE2), LV_PART_MAIN);
-  lv_obj_set_style_arc_color(spn, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
+  lv_obj_set_style_arc_color(spn, lv_color_hex(g_provider->accentColor()), LV_PART_INDICATOR);
   lv_obj_set_style_arc_width(spn, 4, LV_PART_MAIN);
   lv_obj_set_style_arc_width(spn, 4, LV_PART_INDICATOR);
 }
@@ -227,6 +242,29 @@ void ui_settings() {
   add_setting_row(lst, heatTxt,                                 11, C_TEXT, &g_heatLbl);
   add_setting_row(lst, TRS(LV_SYMBOL_LIST "  Idioma: Portugues",
                            LV_SYMBOL_LIST "  Language: English"), 9, C_TEXT, nullptr);
+  // ---- Provider ----
+  {
+    char provTxt[40];
+    snprintf(provTxt, sizeof(provTxt), LV_SYMBOL_SHUFFLE "  %s: %s",
+             TRS("Provedor", "Provider"), g_provider->name());
+    add_setting_row(lst, provTxt, 12, C_TEXT, &g_providerLbl);
+  }
+  // ---- OpenCode (visivel so quando provider=OpenCode) ----
+  if (g_provider->hasDashboardScraping()) {
+    char wsTxt[60];
+    if (g_ocWorkspaceId[0]) {
+      char tmp[16]; strncpy(tmp, g_ocWorkspaceId, 10); tmp[10] = 0;
+      snprintf(wsTxt, sizeof(wsTxt), LV_SYMBOL_HOME "  Workspace ID: %s...", tmp);
+    } else {
+      snprintf(wsTxt, sizeof(wsTxt), "%s", TRS(LV_SYMBOL_HOME "  Workspace ID: nao configurado",
+                                                 LV_SYMBOL_HOME "  Workspace ID: not set"));
+    }
+    add_setting_row(lst, wsTxt, 13, C_MUTED, nullptr);
+    char ckTxt[50];
+    snprintf(ckTxt, sizeof(ckTxt), LV_SYMBOL_KEYBOARD "  Auth Cookie: %s",
+             g_ocCookie[0] ? TRS("configurado", "set") : TRS("nao configurado", "not set"));
+    add_setting_row(lst, ckTxt, 14, C_MUTED, nullptr);
+  }
   add_setting_row(lst, TRS(LV_SYMBOL_WIFI "  Configurar WiFi",
                            LV_SYMBOL_WIFI "  Configure WiFi"),   1, C_TEXT, nullptr);
   add_setting_row(lst, TRS(LV_SYMBOL_KEYBOARD "  Trocar token",
@@ -235,6 +273,24 @@ void ui_settings() {
                            LV_SYMBOL_FILE "  About"),           10, C_TEXT, nullptr);
   add_setting_row(lst, TRS(LV_SYMBOL_TRASH "  Apagar tudo",
                            LV_SYMBOL_TRASH "  Erase everything"), 4, C_BAD, &g_wipeLbl);
+
+  // ---- IP / acesso web ----
+  {
+    String ip = WiFi.localIP().toString();
+    char iptxt[64];
+    if (ip.length() > 0) {
+      snprintf(iptxt, sizeof(iptxt), TRS(LV_SYMBOL_WIFI "  http://%s/settings",
+                                          LV_SYMBOL_WIFI "  http://%s/settings"), ip.c_str());
+    } else {
+      snprintf(iptxt, sizeof(iptxt), "%s",
+               TRS(LV_SYMBOL_WIFI "  Wi-Fi desconectado",
+                   LV_SYMBOL_WIFI "  Wi-Fi disconnected"));
+    }
+    add_setting_row(lst, iptxt, 0, C_FAINT, nullptr);
+    lv_obj_add_flag(lv_obj_get_child(lst, -1), LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_clear_flag(lv_obj_get_child(lst, -1), LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_set_style_bg_opa(lv_obj_get_child(lst, -1), 0, 0);
+  }
 }
 
 // ============================================================
@@ -253,21 +309,81 @@ void ui_about() {
   lv_obj_t *mark = build_claude_mark(scr);
   lv_obj_align(mark, LV_ALIGN_TOP_MID, 0, 0);
 
-  lv_obj_t *t = mklabel(scr, "Claude Usage Stick", &lv_font_montserrat_20, C_TEXT);
-  lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 74);
+  {
+    char tbuf[40];
+    snprintf(tbuf, sizeof(tbuf), "%s Usage Stick", g_provider->name());
+    lv_obj_t *t = mklabel(scr, tbuf, &lv_font_montserrat_20, C_TEXT);
+    lv_obj_align(t, LV_ALIGN_TOP_MID, 0, 74);
+  }
 
   char v[64];
   snprintf(v, sizeof(v), "v" FW_VERSION " \xE2\x80\xA2 ESP32-2432S028 (CYD) \xE2\x80\xA2 LVGL 9.2");
   lv_obj_t *ver = mklabel(scr, v, &lv_font_montserrat_12, C_FAINT);
   lv_obj_align(ver, LV_ALIGN_TOP_MID, 0, 100);
 
-  lv_obj_t *d = mklabel(scr, TRS("Medidor de uso do Claude Code em tempo real: "
-                                 "janelas de 5h e semanal direto da API da Anthropic.",
-                                 "Real-time Claude Code usage meter: "
-                                 "5-hour and weekly windows straight from the Anthropic API."),
-                        &lv_font_montserrat_14, C_MUTED);
+  lv_obj_t *d = mklabel(scr, g_provider->hasApiPolling()
+                         ? TRS("Medidor de uso do Claude Code em tempo real: "
+                               "janelas de 5h e semanal direto da API da Anthropic.",
+                               "Real-time Claude Code usage meter: "
+                               "5-hour and weekly windows straight from the Anthropic API.")
+                         : TRS("Medidor de uso do OpenCode Go: "
+                               "janelas de 5h, semanal e mensal via dashboard web.",
+                               "OpenCode Go usage meter: "
+                               "5-hour, weekly and monthly windows via web dashboard."),
+                         &lv_font_montserrat_14, C_MUTED);
   lv_obj_set_width(d, SCREEN_WIDTH - 40);
   lv_obj_set_style_text_align(d, LV_TEXT_ALIGN_CENTER, 0);
   lv_label_set_long_mode(d, LV_LABEL_LONG_WRAP);
   lv_obj_align(d, LV_ALIGN_TOP_MID, 0, 122);
+}
+
+// ============================================================
+// Overlay de detalhe do erro (clicar no indicador do header)
+// ============================================================
+static void err_close_cb(lv_event_t *e) {
+  lv_obj_t *overlay = (lv_obj_t *)lv_event_get_user_data(e);
+  lv_obj_delete(overlay);
+}
+
+void ui_error_detail() {
+  int code = g_provider->lastErrorCode();
+  const char *msg = g_provider->lastErrorMessage();
+  const char *hint = g_provider->lastErrorHint();
+  if (code == 0) return;  // sem erro
+
+  lv_obj_t *overlay = lv_obj_create(lv_layer_top());
+  lv_obj_set_size(overlay, SCREEN_WIDTH, SCREEN_HEIGHT);
+  lv_obj_set_style_bg_color(overlay, lv_color_hex(0x000000), 0);
+  lv_obj_set_style_bg_opa(overlay, 180, 0);
+  lv_obj_set_style_border_width(overlay, 0, 0);
+  lv_obj_add_event_cb(overlay, err_close_cb, LV_EVENT_CLICKED, (void *)overlay);
+
+  lv_obj_t *card = lv_obj_create(overlay);
+  lv_obj_set_size(card, 260, 180);
+  lv_obj_set_style_bg_color(card, lv_color_hex(C_SURFACE), 0);
+  lv_obj_set_style_radius(card, 14, 0);
+  lv_obj_set_style_border_width(card, 0, 0);
+  lv_obj_set_style_shadow_width(card, 20, 0);
+  lv_obj_center(card);
+  lv_obj_clear_flag(card, LV_OBJ_FLAG_CLICKABLE);
+
+  mklabel(card, LV_SYMBOL_WARNING " Falha na consulta", &lv_font_montserrat_16, C_WARN);
+  lv_obj_align(lv_obj_get_child(card, -1), LV_ALIGN_TOP_MID, 0, 12);
+
+  char buf[128];
+  snprintf(buf, sizeof(buf), "%s", msg[0] ? msg : "Erro desconhecido");
+  mklabel(card, buf, &lv_font_montserrat_14, C_TEXT);
+  lv_obj_align(lv_obj_get_child(card, -1), LV_ALIGN_TOP_MID, 0, 38);
+
+  if (hint[0]) {
+    mklabel(card, hint, &lv_font_montserrat_12, C_MUTED);
+    lv_obj_t *hl = lv_obj_get_child(card, -1);
+    lv_obj_align(hl, LV_ALIGN_TOP_MID, 0, 62);
+    lv_obj_set_width(hl, 220);
+    lv_obj_set_style_text_align(hl, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_long_mode(hl, LV_LABEL_LONG_WRAP);
+  }
+
+  mklabel(card, "Toque para fechar", &lv_font_montserrat_12, C_FAINT);
+  lv_obj_align(lv_obj_get_child(card, -1), LV_ALIGN_BOTTOM_MID, 0, -12);
 }

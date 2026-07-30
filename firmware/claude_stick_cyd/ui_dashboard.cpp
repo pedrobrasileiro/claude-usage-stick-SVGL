@@ -586,17 +586,21 @@ void refresh_ui_values() {
 // Atualiza o texto de status do cabeçalho (sem trocar de tela)
 void set_hdr_status() {
   if (!g_hdrStatus) return;
-  char buf[40]; uint32_t color;
-  if (g_refreshing)        { strcpy(buf, TRS("atualizando...", "updating..."));      color = C_ACCENT; }
-  else if (!g_lastFetchOk) { strcpy(buf, TRS("falha ao atualizar", "update failed")); color = C_BAD; }
+  char buf[40]; uint32_t color, indColor = C_OK;
+  if (g_refreshing)        { strcpy(buf, TRS("atualizando...", "updating..."));      color = g_provider->accentColor(); indColor = C_WARN; }
+  else if (!g_lastFetchOk) { strcpy(buf, TRS("falha ao atualizar", "update failed")); color = C_BAD; indColor = C_BAD; }
   else {
     uint32_t s = (millis() - g_lastOkMs) / 1000;
     if (s < 60) snprintf(buf, sizeof(buf), TRS("atualizado ha %us", "updated %us ago"), (unsigned)s);
     else        snprintf(buf, sizeof(buf), TRS("atualizado ha %umin", "updated %um ago"), (unsigned)(s / 60));
     color = C_MUTED;
+    int effPoll = g_provider->effectivePollSec(g_pollSec);
+    if (s > (uint32_t)effPoll * 2) indColor = C_WARN;  // stale
+    else indColor = C_OK;
   }
   lv_label_set_text(g_hdrStatus, buf);
   lv_obj_set_style_text_color(g_hdrStatus, lv_color_hex(color), 0);
+  if (g_ui.errInd) lv_obj_set_style_bg_color(g_ui.errInd, lv_color_hex(indColor), 0);
 }
 // Botão de refresh: só pede; a busca acontece em background no loop()
 void ui_main() {
@@ -605,14 +609,12 @@ void ui_main() {
 
   start_data_web();
 
-  // Header: Clawd + logotipo + engrenagem (abre Ajustes, gateada por PIN se
-  // a sessão expirou — ver open_settings()). BOOT longo continua como
-  // fallback (ver boot_button_poll()).
+  // Header: logo + wordmark + engrenagem + indicador de erro
   lv_obj_t *hIcon = lv_image_create(scr);
-  lv_image_set_src(hIcon, &img_clawd_sm);
+  lv_image_set_src(hIcon, g_provider->logoSmall());
   lv_obj_set_pos(hIcon, 6, 4);
   lv_obj_t *hWord = lv_image_create(scr);
-  lv_image_set_src(hWord, &img_wordmark);
+  lv_image_set_src(hWord, g_provider->logoWordmark());
   lv_obj_set_pos(hWord, 46, 6);
 
   lv_obj_t *gear = mkbtn(scr, LV_SYMBOL_SETTINGS, &lv_font_montserrat_14, C_SURFACE2, C_TEXT);
@@ -621,8 +623,19 @@ void ui_main() {
   lv_obj_align(gear, LV_ALIGN_TOP_RIGHT, -2, 3);
   lv_obj_add_event_cb(gear, gear_cb, LV_EVENT_CLICKED, NULL);
 
+  // Indicador de status (circulo: verde=ok, amb=stale, verm=erro)
+  g_ui.errInd = lv_obj_create(scr);
+  lv_obj_set_size(g_ui.errInd, 8, 8);
+  lv_obj_set_style_radius(g_ui.errInd, 4, 0);
+  lv_obj_set_style_bg_color(g_ui.errInd, lv_color_hex(C_OK), 0);
+  lv_obj_set_style_border_width(g_ui.errInd, 0, 0);
+  lv_obj_clear_flag(g_ui.errInd, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(g_ui.errInd, LV_ALIGN_TOP_RIGHT, -30, 10);
+  lv_obj_add_flag(g_ui.errInd, LV_OBJ_FLAG_CLICKABLE);
+  lv_obj_add_event_cb(g_ui.errInd, [](lv_event_t *) { ui_error_detail(); }, LV_EVENT_CLICKED, NULL);
+
   g_hdrStatus = mklabel(scr, "", &lv_font_montserrat_12, C_MUTED);
-  lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -30, 8);
+  lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -42, 8);
 
   // Barra fina decrescente até o próximo refresh automático (só indicador).
   g_ui.refBar = lv_bar_create(scr);
@@ -631,37 +644,43 @@ void ui_main() {
   lv_bar_set_range(g_ui.refBar, 0, 1000);
   lv_bar_set_value(g_ui.refBar, 1000, LV_ANIM_OFF);
   lv_obj_set_style_bg_color(g_ui.refBar, lv_color_hex(C_SURFACE), LV_PART_MAIN);
-  lv_obj_set_style_bg_color(g_ui.refBar, lv_color_hex(C_ACCENT), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_color(g_ui.refBar, lv_color_hex(g_provider->accentColor()), LV_PART_INDICATOR);
   lv_obj_set_style_radius(g_ui.refBar, 0, LV_PART_MAIN);
   lv_obj_set_style_radius(g_ui.refBar, 0, LV_PART_INDICATOR);
   lv_obj_clear_flag(g_ui.refBar, LV_OBJ_FLAG_CLICKABLE);
 
   // Telas (BOOT curto avança; ver boot_button_poll())
+  int nTiles = g_provider->modelCount() > 0 ? NTILES : 3;
   g_ui.tv = lv_tileview_create(scr);
   lv_obj_set_pos(g_ui.tv, 0, 32);
   lv_obj_set_size(g_ui.tv, SCREEN_WIDTH, SCREEN_HEIGHT - 32 - 14);
   lv_obj_set_style_bg_opa(g_ui.tv, 0, 0);
   lv_obj_set_style_border_width(g_ui.tv, 0, 0);
   lv_obj_set_scrollbar_mode(g_ui.tv, LV_SCROLLBAR_MODE_OFF);
-  for (int i = 0; i < NTILES; i++) {
+  for (int i = 0; i < nTiles; i++) {
     g_ui.tile[i] = lv_tileview_add_tile(g_ui.tv, i, 0, LV_DIR_HOR);
     tile_setup(g_ui.tile[i]);
   }
   build_tile_agora(g_ui.tile[0]);
-  build_tile_models(g_ui.tile[1]);
-  build_tile_trend(g_ui.tile[2]);
-  build_tile_heat(g_ui.tile[3]);
+  if (nTiles == 4) {
+    build_tile_models(g_ui.tile[1]);
+    build_tile_trend(g_ui.tile[2]);
+    build_tile_heat(g_ui.tile[3]);
+  } else {
+    build_tile_trend(g_ui.tile[1]);
+    build_tile_heat(g_ui.tile[2]);
+  }
   lv_obj_add_event_cb(g_ui.tv, on_tile_changed, LV_EVENT_VALUE_CHANGED, NULL);
 
   // Dots (objetos; o ativo vira pílula)
-  for (int i = 0; i < NTILES; i++) {
+  for (int i = 0; i < nTiles; i++) {
     g_ui.dots[i] = lv_obj_create(scr);
     lv_obj_set_size(g_ui.dots[i], 8, 8);
     lv_obj_set_style_radius(g_ui.dots[i], 4, 0);
     lv_obj_set_style_bg_color(g_ui.dots[i], lv_color_hex(C_BORDER), 0);
     lv_obj_set_style_border_width(g_ui.dots[i], 0, 0);
     lv_obj_clear_flag(g_ui.dots[i], LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_align(g_ui.dots[i], LV_ALIGN_BOTTOM_MID, (int)((i - (NTILES - 1) / 2.0f) * 18), -4);
+    lv_obj_align(g_ui.dots[i], LV_ALIGN_BOTTOM_MID, (int)((i - (nTiles - 1) / 2.0f) * 18), -4);
   }
 
   refresh_ui_values();

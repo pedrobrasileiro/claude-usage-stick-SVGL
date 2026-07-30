@@ -4,8 +4,10 @@
 #include "state_app.h"
 #include "state_security.h"
 #include "storage.h"
+#include "providers/claude_provider.h"
+#include "providers/opencode_provider.h"
 
-extern WiFiManager g_wifi;   // ainda vive no .ino (hardware, ver plano de módulos)
+extern WiFiManager g_wifi;   // ainda vive no .ino (hardware, ver plano de m\u00f3dulos)
 
 void load_persisted() {
   g_prefs.begin(NVS_NAMESPACE, false);
@@ -27,6 +29,17 @@ void load_persisted() {
   g_heatMode = g_prefs.getInt("heatm", 3);
   if (g_heatMode < 0 || g_heatMode > 3) g_heatMode = 3;
   g_lang = g_prefs.getInt("lang", 0) ? 1 : 0;
+
+  // Provider (0=Claude, 1=OpenCode)
+  g_providerIdx = g_prefs.getInt(NVS_PROVIDER, 0);
+  if (g_providerIdx == 1) g_provider = &g_opencodeProvider;
+  else { g_providerIdx = 0; g_provider = &g_claudeProvider; }
+
+  // OpenCode campos
+  String wsid = g_prefs.getString(NVS_OC_WSID, "");
+  strncpy(g_ocWorkspaceId, wsid.c_str(), sizeof(g_ocWorkspaceId) - 1);
+  String ck = g_prefs.getString(NVS_OC_COOKIE, "");
+  strncpy(g_ocCookie, ck.c_str(), sizeof(g_ocCookie) - 1);
 }
 void save_blob() { g_prefs.putBytes("blob", &g_blob, sizeof(EncryptedBlob)); }
 void save_attempts() { g_prefs.putInt("pinatt", g_pinAttempts); }
@@ -39,5 +52,9 @@ void factory_reset() {
   g_token[0] = 0;
   g_pinEntry[0] = 0;
   g_pinAttempts = 0;
+  g_ocWorkspaceId[0] = 0;
+  g_ocCookie[0] = 0;
+  g_providerIdx = 0;
+  g_provider = &g_claudeProvider;
   Serial.println("[RESET] tudo apagado");
 }

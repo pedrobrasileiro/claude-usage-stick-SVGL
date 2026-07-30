@@ -1,9 +1,13 @@
 #include "settings_actions.h"
 #include "state_app.h"
 #include "storage.h"
+#include <WiFi.h>
+#include "providers/claude_provider.h"
+#include "providers/opencode_provider.h"
 
 lv_obj_t *g_briLbl = nullptr, *g_pollLbl = nullptr,
-         *g_tzLbl = nullptr, *g_slideLbl = nullptr, *g_heatLbl = nullptr;
+         *g_tzLbl = nullptr, *g_slideLbl = nullptr, *g_heatLbl = nullptr,
+         *g_providerLbl = nullptr;
 
 static const int POLL_OPTS[4] = {30, 60, 120, 300};
 static const int TZ_OPTS[] = {-3, -4, -5, -6, -7, -8, -2, -1, 0, 1, 2, 3};
@@ -91,5 +95,28 @@ void apply_setting_action(int act) {
       }
       break;
     }
+    case 12: {                                          // toggle provider (Claude <-> OpenCode)
+      g_providerIdx = (g_providerIdx + 1) % 2;
+      g_prefs.putInt(NVS_PROVIDER, g_providerIdx);
+      if (g_providerIdx == 0) g_provider = &g_claudeProvider;
+      else                    g_provider = &g_opencodeProvider;
+      if (g_providerLbl) {
+        char m[40];
+        snprintf(m, sizeof(m), LV_SYMBOL_SHUFFLE "  %s: %s",
+                 TRS("Provedor", "Provider"), g_provider->name());
+        lv_label_set_text(g_providerLbl, m);
+      }
+      request_state(ST_SETTINGS);                       // redesenha settings (mostra/esconde campos OC)
+      break;
+    }
+    case 13: case 14: {                                  // campos OpenCode: mostra IP pra config via web
+      String ip = WiFi.localIP().toString();
+      if (ip.length() > 0) {
+        request_state(ST_MAIN);                          // volta pro dashboard
+        // nao da pra mostrar toast, entao nao fazemos nada — o IP ja esta visivel nos settings
+      }
+      break;
+    }
+    case 15: break;                                      // salvar OpenCode (web only)
   }
 }

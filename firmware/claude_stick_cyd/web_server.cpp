@@ -6,6 +6,7 @@
 #include "state_app.h"
 #include "state_security.h"
 #include "settings_actions.h"
+#include "storage.h"
 #include "logo_assets.h"
 
 extern WiFiManager g_wifi;      // ainda vive no .ino (hardware, ver plano de módulos)
@@ -101,10 +102,58 @@ static String settings_page(const char *msg) {
   h += F("<form method=POST action='/settings'><button name=act value=7>Trocar fuso</button></form>");
   snprintf(row, sizeof(row), "<p>Brilho: <b>%s</b></p>", bri);
   h += row;
-  h += F("<form method=POST action='/settings'><button name=act value=3>Trocar brilho</button></form>"
-         "<p>Idioma: <b>"); h += (g_lang ? "English" : "Portugues"); h += F("</b></p>"
-         "<form method=POST action='/settings'><button name=act value=9>Trocar idioma</button></form>"
-         "<p>Modo do ritmo por hora (heatmap): hoje/7d/30d/tudo</p>"
+  h += F("<form method=POST action='/settings'><button name=act value=3>Trocar brilho</button></form>");
+  h += F("<p>Provedor: <b>"); h += g_provider->name(); h += F("</b></p>");
+  h += F("<form method=POST action='/settings'><button name=act value=12>Trocar provedor</button></form>");
+
+  // Help especifico do provider
+  if (g_provider->hasApiPolling()) {
+    h += F("<details style='margin-top:12px'><summary style='cursor:pointer;color:#D97757'>"
+           "&#8505; Como obter o token Claude</summary>"
+           "<p style='font-size:13px;color:#8C8C98'>"
+           "1. Acesse <a href='https://console.anthropic.com' style='color:#D97757'>console.anthropic.com</a><br>"
+           "2. Vá em <b>API Keys</b> e gere uma chave<br>"
+           "3. Cole no campo de token na tela de provisionamento</p></details>");
+  } else {
+    h += F("<details style='margin-top:12px'><summary style='cursor:pointer;color:#22C55E'>"
+           "&#8505; Como configurar o OpenCode Go</summary>"
+           "<p style='font-size:13px;color:#8C8C98'>"
+           "<b>Workspace ID:</b><br>"
+           "1. Acesse <a href='https://opencode.ai/auth' style='color:#22C55E'>opencode.ai/auth</a><br>"
+           "2. Copie o ID da URL: /workspace/<b>wrk_XXXXXXXX</b><br><br>"
+           "<b>Auth Cookie:</b><br>"
+           "1. Após login, abra DevTools (F12)<br>"
+           "2. Vá em Application > Cookies > opencode.ai<br>"
+           "3. Copie o <b>Value</b> do cookie <b>auth</b></p></details>");
+  }
+
+  // Campos especificos do provider
+  if (g_provider->hasDashboardScraping()) {
+    h += F("<p style='margin-top:14px'><b>OpenCode Go</b></p>"
+           "<form method=POST action='/settings'>"
+           "<input name=oc_wsid placeholder='Workspace ID' value='"); h += g_ocWorkspaceId;
+    h += F("' style='width:100%;padding:10px;border-radius:10px;border:1px solid #30303A;"
+           "background:#1A1A20;color:#F2F0EC;font-size:14px;margin-bottom:6px'>"
+           "<input name=oc_cookie placeholder='Auth Cookie' value='"); h += g_ocCookie;
+    h += F("' style='width:100%;padding:10px;border-radius:10px;border:1px solid #30303A;"
+           "background:#1A1A20;color:#F2F0EC;font-size:14px;margin-bottom:6px'>"
+           "<button name=act value=15>Salvar OpenCode</button></form>");
+  } else {
+    h += F("<p style='margin-top:14px'>Token configurado: <b>");
+    h += (g_hasToken ? "Sim" : "Nao");
+    h += F("</b></p>"
+           "<form method=POST action='/settings'>"
+           "<input name=cl_token placeholder='Novo token API' "
+           "style='width:100%;padding:10px;border-radius:10px;border:1px solid #30303A;"
+           "background:#1A1A20;color:#F2F0EC;font-size:14px;margin-bottom:6px'>"
+           "<input name=cl_pin placeholder='PIN (4 digitos)' inputmode=numeric maxlength=4 "
+           "style='width:100%;padding:10px;border-radius:10px;border:1px solid #30303A;"
+           "background:#1A1A20;color:#F2F0EC;font-size:14px;margin-bottom:6px'>"
+           "<button name=act value=16>Salvar Token</button></form>");
+  }
+  h += F("<p>Idioma: <b>"); h += (g_lang ? "English" : "Portugues"); h += F("</b></p>");
+  h += F("<form method=POST action='/settings'><button name=act value=9>Trocar idioma</button></form>");
+  h += F("<p>Modo do ritmo por hora (heatmap): hoje/7d/30d/tudo</p>"
          "<form method=POST action='/settings'>"
          "<select name=heatm style='width:100%;padding:10px;border-radius:10px;border:1px solid #30303A;"
          "background:#0F0F12;color:#F2F0EC'>"
@@ -151,12 +200,13 @@ static void handleSettingsUnlockPost() {
   }
 }
 static void handleSettingsPost() {
+  int act = g_web->arg("act").toInt();
+
   if (!settings_unlocked()) {
     g_web->send(200, "text/html; charset=utf-8", settings_pin_page(TRS("Digite o PIN primeiro.", "Enter the PIN first.")));
     return;
   }
   g_settingsUnlockedUntil = millis() + SETTINGS_SESSION_MS;   // renova a sessão a cada ação
-  int act = g_web->arg("act").toInt();
   if (act == 4 && g_web->arg("confirm") != "1") {
     g_web->send(200, "text/html; charset=utf-8", settings_page("Não confirmado."));
     return;
@@ -164,6 +214,35 @@ static void handleSettingsPost() {
   if (act == 11) {
     int m = g_web->arg("heatm").toInt();
     if (m >= 0 && m <= 3) { g_heatMode = m; g_prefs.putInt("heatm", m); }
+  } else if (act == 15) {
+    String wsid = g_web->arg("oc_wsid"); wsid.trim();
+    String ck = g_web->arg("oc_cookie"); ck.trim();
+    if (wsid.length() > 0) {
+      strncpy(g_ocWorkspaceId, wsid.c_str(), sizeof(g_ocWorkspaceId) - 1);
+      g_prefs.putString(NVS_OC_WSID, wsid);
+    }
+    if (ck.length() > 0) {
+      strncpy(g_ocCookie, ck.c_str(), sizeof(g_ocCookie) - 1);
+      g_prefs.putString(NVS_OC_COOKIE, ck);
+    }
+  } else if (act == 16) {
+    String token = g_web->arg("cl_token"); token.trim();
+    String pin = g_web->arg("cl_pin"); pin.trim();
+    if (token.length() == 0 || pin.length() != PIN_LEN) {
+      g_web->send(200, "text/html; charset=utf-8", settings_page("Token ou PIN invalido."));
+      return;
+    }
+    EncryptedBlob blob;
+    if (encryptToken(token.c_str(), pin.c_str(), blob)) {
+      g_blob = blob;
+      save_blob();
+      strncpy(g_token, token.c_str(), sizeof(g_token) - 1);
+      g_hasToken = true;
+      g_web->send(200, "text/html; charset=utf-8", settings_page("Token salvo com sucesso."));
+    } else {
+      g_web->send(200, "text/html; charset=utf-8", settings_page("Falha ao cifrar o token."));
+    }
+    return;
   } else {
     apply_setting_action(act);
   }

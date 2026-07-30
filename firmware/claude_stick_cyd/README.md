@@ -15,6 +15,64 @@ pinos certos o touch respondeu normalmente. Navegação e ajustes hoje são
 nativos por toque, com **botão físico (BOOT)** e **portal web**
 continuando como fallback.
 
+## v2.2 — Suporte Multi-Provedor (Claude Code + OpenCode Go)
+
+Agora o dispositivo monitora **dois provedores de IA** com alternância
+pelos ajustes (touch ou web):
+
+| | Claude Code | OpenCode Go |
+|---|---|---|
+| **Fonte de dados** | API Anthropic (headers `unified-*`) | Dashboard web (scraping HTML) |
+| **Métricas** | 5h% + 7d% + status de modelos | 5h% + semanal% + mensal% |
+| **Modelos** | Haiku, Sonnet, Opus, Fable (4 tiles) | Total (3 tiles, sem breakdown) |
+| **Tokens gastos** | 1 token por poll (probe `max_tokens=1`) | **Zero** (GET em página HTML) |
+| **Poll mínimo** | 30s (configurável) | 5 min (fixo, evita rate-limit) |
+| **Logo/Cor** | Clawd + coral #D97757 | Ícone OpenCode + verde #22C55E |
+
+### Arquitetura de providers (`providers/`)
+
+```
+providers/
+├── provider.h              ← classe abstrata AIProvider (20 métodos)
+├── claude_provider.h       ← implementação Claude (delega pra api.h/status.h)
+└── opencode_provider.h     ← implementação OpenCode (scraper do dashboard)
+```
+
+Cada provider implementa os métodos que fazem sentido. Métodos não
+suportados retornam `false`/`nullptr` — o código consumidor verifica
+antes de usar. **OpenCode desativado = zero impacto no runtime.**
+
+### OpenCode Go — como funciona
+
+O OpenCode Go **não tem API pública de consumo** (ao contrário da
+Anthropic, que expõe `unified-*` nos headers). O dispositivo faz
+**scraping do dashboard web** usando o cookie de sessão do usuário:
+
+```
+ESP32 → GET https://opencode.ai/workspace/{id}/go
+       Cookie: auth={sessionCookie}
+       → HTML contém SolidJS SSR: rollingUsage:$R[N]={usagePercent:X,resetInSec:Y}
+       → Parser extrai 3 janelas (5h, semanal, mensal)
+```
+
+**Configuração necessária** (via `/settings` no navegador):
+
+1. **Workspace ID** — da URL `opencode.ai/workspace/{id}`
+2. **Auth Cookie** — DevTools > Application > Cookies > `auth` (Value)
+
+Para mais detalhes, veja [`TUTORIAL_OPENCODE.md`](../../TUTORIAL_OPENCODE.md)
+e [`PLANO_OPENCODE.md`](../../PLANO_OPENCODE.md).
+
+### Webserver (`/settings`)
+
+O portal de ajustes agora é **provider-aware**:
+
+- **Claude**: campo "Novo token API" + PIN + botão "Salvar Token" + `ℹ` ajuda
+- **OpenCode**: campos Workspace ID + Auth Cookie + botão "Salvar" + `ℹ` ajuda
+- Toggle de provedor com reload automático
+- Webserver **sempre ativo** (não morre ao trocar de tela)
+- IP visível na tela de PIN e na tela de erro
+
 ## O que muda em relação ao original
 
 | | Original (`claude_stick`) | CYD (`claude_stick_cyd`) |
@@ -32,15 +90,16 @@ recompilado pra essa placa.
 
 ## Navegação por touch
 
-- **Swipe** nos tiles do dashboard (Agora → Modelos → Janela 5h → Ritmo
-  por hora).
+- **Swipe** nos tiles do dashboard (3 tiles para OpenCode, 4 para Claude).
 - **Engrenagem** no canto superior direito do dashboard abre **Ajustes**
   (pede PIN se a sessão de 5 min já expirou).
 - Botão **Voltar** no topo das telas de Ajustes e Sobre.
 - Cada linha de Ajustes é um botão: toque avança pro próximo valor
-  (brilho, intervalo, fuso, slideshow, ritmo por hora/heatmap) ou abre a
+  (brilho, intervalo, fuso, slideshow, heatmap) ou abre a
   ação (atualizar agora, reconfigurar WiFi, trocar token, sobre, apagar
   tudo — este último exige dois toques de confirmação).
+- **Provedor**: alterna entre Claude Code e OpenCode Go (recarrega a tela
+  com o logo e dados do provedor selecionado).
 - **BOOT físico (GPIO0)** continua funcionando em paralelo como fallback:
   clique curto avança tile / volta pro dashboard; clique longo abre
   Ajustes (mesmo gate de PIN) / Sobre.
@@ -130,10 +189,10 @@ firmware de novo.
 
 ## Layout
 
-As 4 tiles do dashboard (Agora, Modelos, Janela de 5h, Ritmo por hora) e
-o popup de "momento" (animação ao cruzar 25/50/70/100%) já foram
-redimensionados pra 320×240 — o layout original era pensado pra 480×320
-(placa S3) e cortava conteúdo nessa tela menor. O popup de momento, que
-no original tinha mascote e texto lado a lado, foi empilhado
-verticalmente (mascote em cima, texto embaixo) porque não cabe os dois
-lado a lado em 320px de largura.
+As tiles do dashboard (3 para OpenCode, 4 para Claude — Agora, Modelos
+[Claude apenas], Tendência, Ritmo por hora) e o popup de "momento"
+(animação ao cruzar 25/50/70/100%) já foram redimensionados pra 320×240
+— o layout original era pensado pra 480×320 (placa S3) e cortava conteúdo
+nessa tela menor. O popup de momento, que no original tinha mascote e
+texto lado a lado, foi empilhado verticalmente (mascote em cima, texto
+embaixo) porque não cabe os dois lado a lado em 320px de largura.

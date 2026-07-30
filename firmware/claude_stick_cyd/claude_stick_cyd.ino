@@ -41,6 +41,8 @@
 #include "ui_screens.h"
 #include "ui_dashboard.h"
 #include "logo_assets.h"   // Clawd + logotipo oficiais (gerado por tools/gen_logo_assets.py)
+#include "providers/claude_provider.h"
+#include "providers/opencode_provider.h"
 
 // ---- Hardware ----
 Arduino_GFX *gfx = nullptr;
@@ -99,7 +101,8 @@ static void boot_button_poll() {
     g_bootDown = false;
     if (!g_bootLongFired) {                   // clique curto
       if (g_state == ST_MAIN) {
-        int next = (g_curTile + 1) % NTILES;
+        int nTiles = g_provider->modelCount() > 0 ? NTILES : 3;
+        int next = (g_curTile + 1) % nTiles;
         if (g_ui.tv) lv_tileview_set_tile_by_index(g_ui.tv, next, 0, LV_ANIM_ON);
       } else if (g_state == ST_SETTINGS || g_state == ST_ABOUT) {
         request_state(ST_MAIN);
@@ -115,7 +118,7 @@ static void boot_button_poll() {
 // ============================================================
 static void render_state() {
   g_state = g_pending;
-  stop_web();                                 // cada tela sobe o servidor que precisa
+  start_data_web();                           // webserver sempre ativo
   moment_close();                             // overlay vive em lv_layer_top
   lv_obj_clean(lv_layer_top());
   // invalida ponteiros vivos antes de destruir a tela antiga
@@ -123,8 +126,8 @@ static void render_state() {
   g_mascN = 0;
   g_provMsg = nullptr;
   g_hdrStatus = nullptr;
-  g_pinDots = g_pinMsg = nullptr;
-  g_briLbl = g_pollLbl = g_tzLbl = g_slideLbl = g_heatLbl = nullptr;
+  g_pinDots = g_pinMsg = g_pinLockBar = nullptr;
+  g_briLbl = g_pollLbl = g_tzLbl = g_slideLbl = g_heatLbl = g_providerLbl = nullptr;
 
   lv_obj_clean(lv_screen_active());
   lv_obj_set_style_bg_color(lv_screen_active(), lv_color_hex(C_BG), 0);
@@ -138,8 +141,21 @@ static void render_state() {
     case ST_MAIN:      ui_main(); break;
     case ST_SETTINGS:  ui_settings(); break;
     case ST_ABOUT:     ui_about(); break;
-    case ST_ERROR:     ui_message(TRS("Falha", "Failed"),
-                                  g_usage.error[0] ? g_usage.error : TRS("sem dados", "no data"), C_BAD); break;
+    case ST_ERROR: {
+      const char *errMsg = g_usage.error[0] ? g_usage.error
+                        : g_provider->lastErrorMessage()[0] ? g_provider->lastErrorMessage()
+                        : TRS("sem dados", "no data");
+      ui_message(TRS("Falha", "Failed"), errMsg, C_BAD);
+      // Mostra IP pra acessar /settings
+      String ip = WiFi.localIP().toString();
+      if (ip.length() > 0) {
+        char iptxt[48];
+        snprintf(iptxt, sizeof(iptxt), "http://%s/settings", ip.c_str());
+        lv_obj_t *l = mklabel(lv_screen_active(), iptxt, &lv_font_montserrat_12, C_FAINT);
+        lv_obj_align(l, LV_ALIGN_CENTER, 0, 44);
+      }
+      break;
+    }
     default: break;
   }
 }
@@ -166,13 +182,35 @@ static void probe_next_model() {
 // Primeiro load (mostra a tela de carregamento). Vai p/ ST_MAIN ou ST_ERROR.
 static void do_refresh() {
   ensure_time();
-  bool ok = fetchUsage(g_token, g_usage);
-  if (ok) {
-    fetchModelStatus(g_status); g_lastOkMs = millis(); g_lastFetchOk = true;
-    hist_push(g_usage.h5, g_usage.d7); accumulate_heat(g_usage.h5); save_history();
-    check_thresholds();
-    probe_next_model();
-  } else g_lastFetchOk = false;
+  bool ok = false;
+  if (g_provider->hasApiPolling()) {
+    ok = g_provider->fetchUsage(g_token, g_usage);
+    if (ok) {
+      g_provider->fetchModelStatus(g_status);
+      g_lastOkMs = millis(); g_lastFetchOk = true;
+      hist_push(g_usage.h5, g_usage.d7); accumulate_heat(g_usage.h5); save_history();
+      check_thresholds();
+      if (g_provider->hasModelProbing()) probe_next_model();
+    } else g_lastFetchOk = false;
+  } else if (g_provider->hasDashboardScraping()) {
+    ok = g_provider->fetchDashboardUsage(g_ocWorkspaceId, g_ocCookie, g_ocUsage);
+    if (ok) {
+      g_lastOkMs = millis(); g_lastFetchOk = true;
+      // Mapeia OpenCodeUsage -> UsageData pra compatibilidade com dashboard
+      g_usage.ok = true;
+      g_usage.h5 = g_ocUsage.rollingPct;
+      g_usage.d7 = g_ocUsage.weeklyPct;
+      g_usage.h5ResetEpoch = time(nullptr) + g_ocUsage.rollingSec;
+      g_usage.d7ResetEpoch = time(nullptr) + g_ocUsage.weeklySec;
+      g_usage.unifiedResetEpoch = g_usage.h5ResetEpoch;
+      hist_push(g_usage.h5, g_usage.d7);
+      accumulate_heat(g_usage.h5); save_history();
+    } else {
+      g_lastFetchOk = false;
+      strncpy(g_usage.error, g_ocUsage.error[0] ? g_ocUsage.error : g_provider->lastErrorHint(),
+              sizeof(g_usage.error) - 1);
+    }
+  }
   g_lastPollMs = millis();
   request_state(ok ? ST_MAIN : ST_ERROR);
 }
@@ -184,20 +222,43 @@ static void bg_refresh() {
   if (!g_wifi.isConnected()) g_wifi.autoConnect(WIFI_CONNECT_TIMEOUT_MS);
   ensure_time();
   g_refreshing = true; set_hdr_status(); lv_refr_now(NULL);
-  UsageData u = {};
-  bool ok = fetchUsage(g_token, u);
+
+  bool ok = false;
   bool rebuild = false;
-  if (ok) {
-    g_usage = u; g_lastOkMs = millis(); g_lastFetchOk = true;
-    hist_push(u.h5, u.d7); accumulate_heat(u.h5); save_history();
-    check_thresholds();
-    int moodBefore[NMODELS];
-    for (int i = 0; i < NMODELS; i++) moodBefore[i] = model_mood(i);
-    fetchModelStatus(g_status);
-    probe_next_model();
-    for (int i = 0; i < NMODELS; i++)
-      if (moodBefore[i] != model_mood(i)) rebuild = true;   // mascote muda de humor
-  } else g_lastFetchOk = false;
+
+  if (g_provider->hasApiPolling()) {
+    UsageData u = {};
+    ok = g_provider->fetchUsage(g_token, u);
+    if (ok) {
+      g_usage = u; g_lastOkMs = millis(); g_lastFetchOk = true;
+      hist_push(u.h5, u.d7); accumulate_heat(u.h5); save_history();
+      check_thresholds();
+      int moodBefore[NMODELS];
+      for (int i = 0; i < NMODELS; i++) moodBefore[i] = model_mood(i);
+      g_provider->fetchModelStatus(g_status);
+      probe_next_model();
+      for (int i = 0; i < NMODELS; i++)
+        if (moodBefore[i] != model_mood(i)) rebuild = true;
+    } else g_lastFetchOk = false;
+  } else if (g_provider->hasDashboardScraping()) {
+    ok = g_provider->fetchDashboardUsage(g_ocWorkspaceId, g_ocCookie, g_ocUsage);
+    if (ok) {
+      g_lastOkMs = millis(); g_lastFetchOk = true;
+      g_usage.ok = true;
+      g_usage.h5 = g_ocUsage.rollingPct;
+      g_usage.d7 = g_ocUsage.weeklyPct;
+      g_usage.h5ResetEpoch = time(nullptr) + g_ocUsage.rollingSec;
+      g_usage.d7ResetEpoch = time(nullptr) + g_ocUsage.weeklySec;
+      g_usage.unifiedResetEpoch = g_usage.h5ResetEpoch;
+      hist_push(g_usage.h5, g_usage.d7);
+      accumulate_heat(g_usage.h5); save_history();
+    } else {
+      g_lastFetchOk = false;
+      strncpy(g_usage.error, g_ocUsage.error[0] ? g_ocUsage.error : g_provider->lastErrorHint(),
+              sizeof(g_usage.error) - 1);
+    }
+  }
+
   g_refreshing = false;
   g_lastPollMs = millis();
   if (rebuild) request_state(ST_MAIN);    // mascotes mudaram -> rebuild
@@ -283,7 +344,7 @@ void loop() {
 
   // Poll automático EM BACKGROUND (sem trocar de tela) + refresh manual
   if (g_state == ST_MAIN &&
-      (g_wantRefresh || millis() - g_lastPollMs > (uint32_t)g_pollSec * 1000)) {
+      (g_wantRefresh || millis() - g_lastPollMs > (uint32_t)g_provider->effectivePollSec(g_pollSec) * 1000)) {
     g_wantRefresh = false;
     bg_refresh();           // seta g_lastPollMs no fim
   }
@@ -300,7 +361,7 @@ void loop() {
       int v;
       if (g_refreshing) v = 1000;
       else {
-        uint32_t el = now - g_lastPollMs, per = (uint32_t)g_pollSec * 1000;
+        uint32_t el = now - g_lastPollMs, per = (uint32_t)g_provider->effectivePollSec(g_pollSec) * 1000;
         v = el >= per ? 0 : (int)(1000 - (uint64_t)el * 1000 / per);
       }
       lv_bar_set_value(g_ui.refBar, v, LV_ANIM_OFF);
@@ -337,7 +398,8 @@ void loop() {
     if (g_slideSec > 0 && g_ui.tv && !g_refreshing && !g_mo.scrim &&
         now - g_lastTouchMs > 10000 && now - g_lastSlideMs > (uint32_t)g_slideSec * 1000) {
       g_lastSlideMs = now;
-      int next = (g_curTile + 1) % NTILES;
+      int nTiles2 = g_provider->modelCount() > 0 ? NTILES : 3;
+      int next = (g_curTile + 1) % nTiles2;
       lv_tileview_set_tile_by_index(g_ui.tv, next, 0, LV_ANIM_ON);
     }
 
@@ -347,6 +409,29 @@ void loop() {
       g_pendWin = -1;
     }
     if (g_mo.scrim) moment_tick();
+  }
+
+  // Atualiza barra de lockout na tela de PIN
+  if (g_state == ST_PIN && g_pinLockBar && millis() < g_lockoutUntil) {
+    uint32_t totalMs = g_lockoutUntil - g_lockoutStartMs;
+    uint32_t elapsed = millis() - g_lockoutStartMs;
+    int val = totalMs > 0 ? (int)(1000 - (uint64_t)elapsed * 1000 / totalMs) : 0;
+    if (val < 0) val = 0;
+    lv_bar_set_value(g_pinLockBar, val, LV_ANIM_OFF);
+    static uint32_t lastPinBar = 0;
+    if (millis() - lastPinBar > 250) {
+      lastPinBar = millis();
+      if (g_pinMsg) {
+        int rem = (g_lockoutUntil - millis()) / 1000;
+        if (rem <= 0) {
+          lv_label_set_text(g_pinMsg, "");
+          lv_obj_add_flag(g_pinLockBar, LV_OBJ_FLAG_HIDDEN);
+        } else {
+          char m[48]; snprintf(m, sizeof(m), TRS("Aguarde %ds", "Wait %ds"), rem);
+          lv_label_set_text(g_pinMsg, m);
+        }
+      }
+    }
   }
 
   delay(5);

@@ -3,8 +3,17 @@
 #include <Preferences.h>
 #include "api.h"
 #include "status.h"
+#include "providers/provider.h"
 
 extern Preferences g_prefs;   // NVS — usado por storage.cpp, security.cpp, settings_actions.cpp
+
+// ---- Provedor de IA ativo (Claude Code ou OpenCode Go) ----
+class ClaudeProvider;
+class OpenCodeProvider;
+extern ClaudeProvider    g_claudeProvider;
+extern OpenCodeProvider  g_opencodeProvider;
+extern AIProvider* g_provider;
+extern int g_providerIdx;     // 0 = Claude, 1 = OpenCode (NVS "provider")
 
 // ============================================================
 // Estado da aplicação: máquina de estado, config runtime (NVS)
@@ -64,3 +73,8 @@ extern uint32_t g_lastSlideMs;
 extern bool g_forceWifi;          // "Configurar WiFi" pediu reconfiguração
 extern bool g_forceToken;         // "Trocar token" pediu novo token
 extern bool g_timeInit;
+
+// ---- OpenCode Go ----
+extern OpenCodeUsage g_ocUsage;          // ultimo fetch do dashboard OpenCode
+extern char g_ocWorkspaceId[64];         // ID do workspace (NVS "oc_wsid")
+extern char g_ocCookie[768];             // cookie de sessao (NVS "oc_cookie", cifrado)

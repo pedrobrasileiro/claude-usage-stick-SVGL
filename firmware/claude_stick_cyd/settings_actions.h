@@ -9,6 +9,6 @@
 // atualiza quando não são nulos (web não os usa).
 // ============================================================
 
-extern lv_obj_t *g_briLbl, *g_pollLbl, *g_tzLbl, *g_slideLbl, *g_heatLbl;
+extern lv_obj_t *g_briLbl, *g_pollLbl, *g_tzLbl, *g_slideLbl, *g_heatLbl, *g_providerLbl;
 
 void apply_setting_action(int act);

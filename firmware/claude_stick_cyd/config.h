@@ -51,8 +51,7 @@
 
 // ── Segurança (PIN + AES-256-GCM) ────────────────────────
 #define PIN_LEN                 4
-#define MAX_PIN_ATTEMPTS        10
-#define LOCKOUT_BASE_SEC        60       // dobra a cada falha
+#define LOCKOUT_BASE_SEC        10       // dobra a cada falha (10,20,40,80... máx 1h)
 #define KDF_ROUNDS              10000
 #define SETTINGS_SESSION_MS     (5UL * 60UL * 1000UL)  // sessão de /settings desbloqueada
 
@@ -74,5 +73,18 @@
 
 // ── Portal de configuração (AP de primeiro uso) ──────────
 #define PROVISION_AP_SSID       "ClaudeStick-Setup"
+
+// ── OpenCode Go (scraping de dashboard web) ─────────────
+#define OC_MIN_POLL_SEC         300      // poll minimo p/ scraping (evita rate-limit)
+#define OC_SCRAPE_TIMEOUT_MS    10000    // timeout do GET no dashboard
+#define OC_DASHBOARD_URL        "https://opencode.ai/workspace/"
+#define OC_DASHBOARD_SUFFIX     "/go"
+#define OC_USER_AGENT           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Gecko/20100101 Firefox/148.0"
+// Verde OpenCode (tailwind green-500)
+#define OC_ACCENT               0x22C55E
+// NVS keys dos campos OpenCode
+#define NVS_OC_WSID             "oc_wsid"
+#define NVS_OC_COOKIE           "oc_cookie"
+#define NVS_PROVIDER            "provider"
 
 #endif // CONFIG_H

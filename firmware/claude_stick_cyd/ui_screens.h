@@ -16,3 +16,4 @@ void ui_loading(const char *sub);
 
 void ui_settings();
 void ui_about();
+void ui_error_detail();     // overlay com detalhes do ultimo erro do provider

@@ -1,7 +1,15 @@
 #include "state_app.h"
 #include "config.h"
+#include "providers/claude_provider.h"
+#include "providers/opencode_provider.h"
 
 Preferences g_prefs;
+
+// ---- Provedor ----
+ClaudeProvider    g_claudeProvider;
+OpenCodeProvider  g_opencodeProvider;
+AIProvider* g_provider = &g_claudeProvider;
+int g_providerIdx = 0;
 
 uint8_t g_lang = 0;
 
@@ -43,3 +51,7 @@ uint32_t g_lastSlideMs = 0;
 bool g_forceWifi = false;
 bool g_forceToken = false;
 bool g_timeInit = false;
+
+OpenCodeUsage g_ocUsage = {};
+char g_ocWorkspaceId[64] = {0};
+char g_ocCookie[768] = {0};
