@@ -8,15 +8,15 @@
 // ============================================================
 
 // ---- Paleta (escuro, minimalista; acento coral do Claude) ----
-#define C_BG       0x0F0F12
-#define C_SURFACE  0x1A1A20   // cards sem borda
-#define C_SURFACE2 0x24242C   // teclas / botoes secundarios
+#define C_BG       0x000000   // preto puro — em cinza-chumbo (0x0F0F12) o painel da Fikra "lavava" o fundo
+#define C_SURFACE  0x121215   // cards sem borda (escurecido — ver C_BG)
+#define C_SURFACE2 0x1C1C22   // teclas / botoes secundarios (escurecido — ver C_BG)
 #define C_TRACK    0x26262E   // trilho de barras
 #define C_GRID     0x232329   // linhas de grade dentro de cards
 #define C_BORDER   0x30303A   // hairlines raras
 #define C_TEXT     0xF2F0EC
-#define C_MUTED    0x8C8C98
-#define C_FAINT    0x5C5C68
+#define C_MUTED    0xAEB0BC   // clareado — mais contraste sobre C_SURFACE (ver C_BG)
+#define C_FAINT    0x82828E   // clareado — mais contraste sobre C_SURFACE (ver C_BG)
 #define C_ACCENT   0xD97757   // coral Claude
 #define C_OK       0x4ADE80
 #define C_WARN     0xFBBF24

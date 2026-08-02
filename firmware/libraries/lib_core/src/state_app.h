@@ -27,12 +27,20 @@ extern uint8_t g_lang;
 
 // ---- Máquina de estado ----
 enum State {
-  ST_BOOT, ST_PIN, ST_PROVISION, ST_LOADING, ST_MAIN, ST_SETTINGS, ST_ABOUT, ST_ERROR
+  ST_BOOT, ST_PIN, ST_PROVISION, ST_LOADING, ST_MAIN, ST_SETTINGS, ST_ABOUT, ST_ERROR,
+  ST_EXTRA   // tela extra opcional específica da placa (ex.: LED RGB na Fikra) — ver g_hasBoardExtra
 };
 extern State g_state;
 extern State g_pending;
 extern bool  g_dirty;
 void request_state(State s);
+
+// ---- Tela extra opcional (hardware específico de uma placa) ----
+// Por padrão nenhuma placa tem — o .ino de quem tiver (ex.: claude_stick_fikra,
+// LED RGB WS2812) seta essas duas em setup() e trata ST_EXTRA no seu
+// render_state(). Sem isso, a entrada correspondente nem aparece em Ajustes.
+extern bool g_hasBoardExtra;
+extern const char *g_boardExtraLabel;
 
 // ---- Dados ----
 extern UsageData   g_usage;

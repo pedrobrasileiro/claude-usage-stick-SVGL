@@ -18,6 +18,9 @@ State g_pending = ST_BOOT;
 bool  g_dirty = false;
 void request_state(State s) { g_pending = s; g_dirty = true; }
 
+bool g_hasBoardExtra = false;
+const char *g_boardExtraLabel = nullptr;
+
 UsageData   g_usage = {};
 ModelStatus g_status = {true, true, true, true, false};
 

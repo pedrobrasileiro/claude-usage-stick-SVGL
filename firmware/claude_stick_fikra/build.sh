@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Build / upload / monitor do Claude Usage Stick — CYD (ESP32-2432S028).
+# Build / upload / monitor do Claude Usage Stick — Fikra ES3C28P (ESP32-S3).
 #
 # Uso:
 #   ./build.sh                 # compila
@@ -8,25 +8,24 @@
 #   ./build.sh upload <porta>  # compila + grava na porta indicada
 #   ./build.sh monitor <porta> # abre o serial monitor (115200)
 #
-# Pré-requisitos: arduino-cli, core esp32:esp32, libs GFX Library for
-# Arduino 1.6.5 + lvgl 9.2.2 + ArduinoJson 7.2.0 (ver firmware/claude_stick/
-# build.sh — mesmas versões, biblioteca compartilhada) + XPT2046_Touchscreen
-# (touch resistivo, SPI dedicado — ver touch.h).
+# Pré-requisitos: arduino-cli 1.4.x, core esp32:esp32 3.3.8, libs GFX
+# Library for Arduino 1.6.5 + lvgl 9.2.2 + ArduinoJson 7.2.0 (mesmas versões
+# do claude_stick/ e claude_stick_cyd/).
 #
 # Lógica de negócio/UI (providers, estado, dashboard etc.) vem de
 # firmware/libraries/lib_core/ (biblioteca Arduino compartilhada com
-# claude_stick_fikra/ — ver firmware/README.md). --libraries abaixo aponta
+# claude_stick_cyd/ — ver firmware/README.md). --libraries abaixo aponta
 # pra firmware/libraries/ pra arduino-cli achar essa lib local, sem
 # escanear os sketches (evita conflito de headers com claude_stick/).
 #
-# Upload a 921600 falha nesse conversor serial (CH340/CP2102) — 115200 é o
-# que funciona de forma confiável (validado no bring-up).
+# PORT_DEFAULT é um placeholder — confirme a porta real (USB-C nativo do
+# S3, geralmente /dev/cu.usbmodem*) após a primeira gravação.
 set -euo pipefail
 
 SKETCH_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="$(dirname "$SKETCH_DIR")/libraries"
-FQBN="esp32:esp32:esp32:PartitionScheme=huge_app,UploadSpeed=115200"
-PORT_DEFAULT="/dev/cu.usbserial-10"
+FQBN="esp32:esp32:esp32s3:PSRAM=opi,FlashSize=16M,PartitionScheme=custom,CDCOnBoot=cdc,USBMode=hwcdc,FlashMode=qio"
+PORT_DEFAULT="/dev/cu.usbmodem101"
 
 LVFLAGS="-DLV_CONF_INCLUDE_SIMPLE -I${SKETCH_DIR}"
 

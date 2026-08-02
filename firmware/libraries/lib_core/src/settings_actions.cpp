@@ -118,5 +118,6 @@ void apply_setting_action(int act) {
       break;
     }
     case 15: break;                                      // salvar OpenCode (web only)
+    case 16: if (g_hasBoardExtra) request_state(ST_EXTRA); break;  // tela extra da placa (ex.: LED RGB)
   }
 }

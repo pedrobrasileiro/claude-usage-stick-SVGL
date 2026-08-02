@@ -265,6 +265,8 @@ void ui_settings() {
              g_ocCookie[0] ? TRS("configurado", "set") : TRS("nao configurado", "not set"));
     add_setting_row(lst, ckTxt, 14, C_MUTED, nullptr);
   }
+  if (g_hasBoardExtra && g_boardExtraLabel)
+    add_setting_row(lst, g_boardExtraLabel, 16, C_TEXT, nullptr);
   add_setting_row(lst, TRS(LV_SYMBOL_WIFI "  Configurar WiFi",
                            LV_SYMBOL_WIFI "  Configure WiFi"),   1, C_TEXT, nullptr);
   add_setting_row(lst, TRS(LV_SYMBOL_KEYBOARD "  Trocar token",
