@@ -111,18 +111,29 @@ Opened from the gear (scrollable list, 44 px touch rows):
 
 ## Hardware
 
-|         |                                                                                                                                                       |
-| ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Screen  | **Mini ESP32-S3 3.5" Capacitive Touch IPS · 480×320 · 8 MB PSRAM · 16 MB Flash** ([AliExpress](https://pt.aliexpress.com/item/1005007641039070.html)) |
-| Chip    | ESP32-S3 (native USB)                                                                                                                                 |
-| Display | **AXS15231B**, QSPI interface                                                                                                                         |
-| Touch   | **AXS15231B** capacitive, I²C `0x3B`                                                                                                                  |
+Three board variants, three sketches — pick the one matching what's in your hands:
 
-> **OPI PSRAM is mandatory** — the 480×320 LVGL buffer doesn't fit in internal RAM.
+| Board | Sketch | Chip | Display | Touch | PSRAM |
+| --- | --- | --- | --- | --- | --- |
+| **Guition JC4832W535** ([AliExpress](https://pt.aliexpress.com/item/1005007641039070.html)) | [`firmware/claude_stick/`](firmware/claude_stick/) | ESP32-S3 (native USB) | **AXS15231B** QSPI, 480×320 | **AXS15231B** capacitive, I²C `0x3B` | Yes (OPI) |
+| **"Cheap Yellow Display" ESP32-2432S028** | [`firmware/claude_stick_cyd/`](firmware/claude_stick_cyd/) | ESP32 (classic WROOM-32) | ILI9341 SPI, 320×240 | **XPT2046** resistive, dedicated SPI bus | No |
+| **Fikra ES3C28P** | [`firmware/claude_stick_fikra/`](firmware/claude_stick_fikra/) | ESP32-S3 | ILI9341V SPI, 240×320 (rotated to 320×240 landscape) | **FT6336G** capacitive, I²C `0x38` | Yes (OPI) |
 
-Pins and the validated display/color/touch configuration are in
+The original board (`claude_stick/`) is the reference implementation — a monolithic sketch,
+described throughout the rest of this README. The other two share business logic and UI through
+`firmware/libraries/lib_core/` (an Arduino library) and only swap in their own `config.h` (pins),
+`touch.h` (touch driver) and `build.sh` FQBN. See [`firmware/README.md`](firmware/README.md) for
+the full breakdown, including the Fikra's exclusive **WS2812 RGB LED** settings screen.
+
+> On boards with **no PSRAM** (the CYD), the LVGL buffer runs at a lower resolution (320×240) that
+> fits internal RAM. On the OPI-PSRAM boards (Guition, Fikra), **OPI PSRAM is mandatory** — the
+> 480×320 (or equivalent) LVGL buffer doesn't fit in internal RAM.
+
+Pins and the validated display/color/touch configuration for the Guition board are in
 [`firmware/REFERENCIA-HARDWARE-LVGL.md`](firmware/REFERENCIA-HARDWARE-LVGL.md) and the reference
-bring-up sketch in [`firmware/bringup/`](firmware/bringup/).
+bring-up sketch in [`firmware/bringup/`](firmware/bringup/). For the CYD, see
+[`firmware/bringup_cyd/`](firmware/bringup_cyd/) and
+[`firmware/claude_stick_cyd/README.md`](firmware/claude_stick_cyd/README.md).
 
 ### 3D-printable case
 
@@ -293,7 +304,7 @@ This is a fork of the **Claude Usage Stick** (a multi-board firmware with physic
 
 ```
 firmware/
-  claude_stick/                 # the firmware (arduino-cli sketch)
+  claude_stick/                 # Guition JC4832W535 — the reference firmware (arduino-cli sketch)
     claude_stick.ino            # setup/loop, state machine, dashboard, screens
     api.cpp/.h                  # fetchUsage() — usage via API headers
     status.cpp/.h               # fetchModelStatus() — model health
@@ -305,10 +316,14 @@ firmware/
     lv_conf.h                   # LVGL 9.2 config
     partitions.csv              # 16 MB partition (app + nvs + LittleFS)
     build.sh                    # compile / flash / monitor
-  bringup/                      # validated bring-up (hardware reference)
-  REFERENCIA-HARDWARE-LVGL.md   # display/colors/touch that work
-assets/                         # mockups das telas + assets de marca (brand/)
-3D Case/                        # case imprimível (STL) para a placa
+  claude_stick_cyd/              # "Cheap Yellow Display" ESP32-2432S028 — thin sketch, uses lib_core
+  claude_stick_fikra/            # Fikra ES3C28P (ESP32-S3) — thin sketch, uses lib_core
+  libraries/lib_core/            # shared business logic + LVGL UI (providers, state, screens, history)
+  bringup/                       # validated bring-up (Guition, hardware reference)
+  bringup_cyd/                   # validated bring-up (CYD)
+  REFERENCIA-HARDWARE-LVGL.md    # display/colors/touch that work (Guition)
+assets/                          # mockups das telas + assets de marca (brand/)
+3D Case/                         # case imprimível (STL) para a placa Guition
 ```
 
 ## Where to tweak
