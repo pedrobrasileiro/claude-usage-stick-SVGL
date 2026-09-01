@@ -1,5 +1,6 @@
 #pragma once
 #include <lvgl.h>
+#include "config.h"
 #include "state_app.h"   // NMODELS
 #include "history.h"     // HIST_MAX
 
@@ -17,6 +18,9 @@ struct DashUI {
   lv_obj_t *tv, *tile[NTILES], *dots[NTILES];
   lv_obj_t *refBar;
   lv_obj_t *errInd;               // indicador de erro (circulo verde/amb/vermelho)
+#ifdef BATTERY_ADC_PIN
+  lv_obj_t *battIcon, *battPct;   // icone + porcentagem da bateria (cabecalho)
+#endif
   // agora (overview + reset mesclados)
   lv_obj_t *agChip, *agPct5, *agCd5, *agAt5;
   lv_obj_t *agPct7, *agCd7, *agAt7, *agTok;

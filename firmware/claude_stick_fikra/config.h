@@ -35,6 +35,9 @@
 // ── LED RGB endereçável (WS2812, embutido na placa) ──────
 #define RGB_LED_PIN 42
 
+// ── Bateria (leitura ADC da tensão, conforme Manual Técnico Fikra 2.0) ──
+#define BATTERY_ADC_PIN 9
+
 // ── Navegação ─────────────────────────────────────────────
 #define CFG_BOOT_PIN            0     // IO0/BOOT, ativo em LOW (fallback)
 #define BOOT_LONGPRESS_MS    900

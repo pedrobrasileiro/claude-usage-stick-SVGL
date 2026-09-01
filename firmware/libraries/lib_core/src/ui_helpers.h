@@ -22,6 +22,26 @@
 #define C_WARN     0xFBBF24
 #define C_BAD      0xF87171
 
+// ---- Bateria (leitura ADC — calibrar em bancada com multímetro) ----
+#define BATTERY_ADC_RESOLUTION   4095
+#define BATTERY_ADC_SAMPLES      32     // oversampling p/ filtrar ruído do ADC (sinal de carga é lento)
+#define BATTERY_DIVIDER_RATIO    2.0f   // razão do divisor resistivo antes do ADC — calibrar
+#define BATTERY_VOLT_EMPTY       3.3f   // tensão -> 0%
+#define BATTERY_VOLT_FULL        4.02f  // tensão -> 100% — calibrado pelo platô observado em carga (log 2026-09-01), pendente confirmar com multímetro
+#define BATTERY_PCT_GREEN_MIN    50     // > 50%  => verde
+#define BATTERY_PCT_YELLOW_MIN   20     // 20-50% => amarelo; 10-20% => vermelho fixo
+#define BATTERY_PCT_RED_BLINK    10     // <= 10% => vermelho piscando
+#define BATTERY_POLL_MS          5000
+#define BATTERY_BLINK_MS         500
+// Medido em bancada (Fikra + LiPo VEKEN 3020mAh): no trecho "plateau" da
+// curva de carga a subida real é só ~0,2%/min — bem mais lenta que o
+// esperado por corrente/capacidade nominal. O ruído do ADC (mesmo com
+// oversampling) fica em ±0,2-0,3%, quase do tamanho do sinal numa janela
+// curta — por isso a janela é longa (10min) e o limiar, baixo (0,5%).
+// Custo: pode levar até ~10min pra acender o raio depois de plugar o USB.
+#define BATTERY_CHARGE_WINDOW_MS 600000  // intervalo entre leitura-base e atual
+#define BATTERY_CHARGE_MIN_DELTA 0.5f    // %, alta mínima na janela p/ contar como "carregando"
+
 lv_obj_t *mklabel(lv_obj_t *p, const char *txt, const lv_font_t *font, uint32_t color);
 void no_box(lv_obj_t *o);
 // Botão pílula com label centralizado; user_data leva o State alvo (nav_cb).

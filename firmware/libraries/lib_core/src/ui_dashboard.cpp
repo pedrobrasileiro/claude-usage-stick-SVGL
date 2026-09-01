@@ -9,6 +9,11 @@
 #include "history.h"
 #include "logo_assets.h"
 #include "config.h"
+#include "battery.h"
+
+#ifdef BATTERY_ADC_PIN
+static void battery_update_ui();
+#endif
 
 // ============================================================
 // Builders dos 4 tiles
@@ -199,6 +204,9 @@ void update_tok_row() {
 // Contadores/relógios (1s) — separado dos valores de fetch.
 void dash_tick() {
   if (g_state != ST_MAIN || !g_ui.agCd5) return;
+#ifdef BATTERY_ADC_PIN
+  battery_update_ui();
+#endif
   char e[32], c[24], b[64];
   fmt_eta(g_usage.h5ResetEpoch, e, sizeof(e));
   lv_label_set_text(g_ui.agCd5, e);
@@ -583,6 +591,38 @@ void refresh_ui_values() {
   dash_tick();
 }
 
+#ifdef BATTERY_ADC_PIN
+// Ícone (nível ou raio se carregando) + porcentagem no cabeçalho; pisca em vermelho crítico.
+static void battery_update_ui() {
+  if (!g_ui.battIcon || !g_ui.battPct) return;
+  static uint32_t lastPollMs = 0;
+  static int lastPct = -1;
+  static bool lastCharging = false;
+  uint32_t now = millis();
+  if (now - lastPollMs >= BATTERY_POLL_MS || lastPct < 0) {
+    lastPollMs = now;
+    lastPct = battery_read_percent();
+    lastCharging = battery_is_charging();
+    char buf[8]; snprintf(buf, sizeof(buf), "%d%%", lastPct);
+    lv_label_set_text(g_ui.battPct, buf);
+  }
+
+  uint32_t color = lastCharging ? C_OK : battery_color(lastPct);
+  lv_label_set_text(g_ui.battIcon, lastCharging ? LV_SYMBOL_CHARGE :
+                     (lastPct > 80 ? LV_SYMBOL_BATTERY_FULL :
+                      lastPct > 55 ? LV_SYMBOL_BATTERY_3 :
+                      lastPct > 30 ? LV_SYMBOL_BATTERY_2 :
+                      lastPct > 10 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY));
+  lv_obj_set_style_text_color(g_ui.battIcon, lv_color_hex(color), 0);
+  lv_obj_set_style_text_color(g_ui.battPct, lv_color_hex(color), 0);
+
+  bool blink = !lastCharging && lastPct <= BATTERY_PCT_RED_BLINK;
+  bool visible = !blink || ((now / BATTERY_BLINK_MS) % 2 == 0);
+  lv_obj_set_style_opa(g_ui.battIcon, visible ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+  lv_obj_set_style_opa(g_ui.battPct, visible ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+}
+#endif
+
 // Atualiza o texto de status do cabeçalho (sem trocar de tela)
 void set_hdr_status() {
   if (!g_hdrStatus) return;
@@ -634,8 +674,20 @@ void ui_main() {
   lv_obj_add_flag(g_ui.errInd, LV_OBJ_FLAG_CLICKABLE);
   lv_obj_add_event_cb(g_ui.errInd, [](lv_event_t *) { ui_error_detail(); }, LV_EVENT_CLICKED, NULL);
 
+#ifdef BATTERY_ADC_PIN
+  // Bateria: ícone de nível (ou raio, carregando) + porcentagem, sempre visível.
+  g_ui.battPct = mklabel(scr, "--%", &lv_font_montserrat_12, C_MUTED);
+  lv_obj_align(g_ui.battPct, LV_ALIGN_TOP_RIGHT, -70, 8);
+  g_ui.battIcon = mklabel(scr, LV_SYMBOL_BATTERY_EMPTY, &lv_font_montserrat_14, C_MUTED);
+  lv_obj_align(g_ui.battIcon, LV_ALIGN_TOP_RIGHT, -46, 6);
+#endif
+
   g_hdrStatus = mklabel(scr, "", &lv_font_montserrat_12, C_MUTED);
+#ifdef BATTERY_ADC_PIN
+  lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -100, 8);
+#else
   lv_obj_align(g_hdrStatus, LV_ALIGN_TOP_RIGHT, -42, 8);
+#endif
 
   // Barra fina decrescente até o próximo refresh automático (só indicador).
   g_ui.refBar = lv_bar_create(scr);
